@@ -59,8 +59,10 @@ class LocalStorageAdapter(StorageAdapter):
 
     def public_url(self, key: str) -> str:
         settings = get_settings()
-        backend_base = getattr(settings, "backend_base_url", "http://localhost:8000")
-        return f"{backend_base}/uploads/{key}"
+        backend_base = getattr(settings, "backend_base_url", None)
+        if backend_base:
+            return f"{backend_base.rstrip('/')}/uploads/{key.lstrip('/')}"
+        return f"/uploads/{key.lstrip('/')}"
 
 
 class S3StorageAdapter(StorageAdapter):

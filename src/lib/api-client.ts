@@ -11,9 +11,24 @@
  *   throws ApiClientError on the error shape so callers can just `await`.
  */
 
-const API_BASE_URL =
-  import.meta.env["VITE_API_BASE_URL"] ||
-  (import.meta.env.DEV ? "http://localhost:8000/api/v1" : "/api/v1");
+function resolveApiBaseUrl(): string {
+  const envUrl = import.meta.env["VITE_API_BASE_URL"];
+  if (envUrl && typeof envUrl === "string" && envUrl.trim() !== "") {
+    // If VITE_API_BASE_URL points to localhost/127.0.0.1 in production,
+    // fallback to relative /api/v1 so production deployment uses same-origin routes.
+    if (
+      import.meta.env.PROD &&
+      (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))
+    ) {
+      return "/api/v1";
+    }
+    return envUrl;
+  }
+  // In development, default to http://localhost:8000/api/v1; in production, use relative /api/v1
+  return import.meta.env.DEV ? "http://localhost:8000/api/v1" : "/api/v1";
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiClientError extends Error {
   status: number;
