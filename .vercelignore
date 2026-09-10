@@ -1,0 +1,13 @@
+node_modules
+.output
+.tanstack
+.wrangler
+backend/.venv
+backend/__pycache__
+backend/**/__pycache__
+backend/.pytest_cache
+backend/.mypy_cache
+backend/.ruff_cache
+backend/uploads/*
+!backend/uploads/.gitkeep
+.git
