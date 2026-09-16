@@ -174,15 +174,42 @@ def create_app() -> FastAPI:
     for router in all_public_routers():
         app.include_router(router, prefix=settings.api_prefix)
 
-    from fastapi.staticfiles import StaticFiles
     from pathlib import Path
+    import mimetypes
+    from fastapi.responses import FileResponse, Response
 
     uploads_dir = Path(settings.storage_local_path)
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-    app.mount("/api/v1/uploads", StaticFiles(directory=uploads_dir), name="api_v1_uploads")
+
+    @app.get("/uploads/{file_path:path}")
+    @app.get("/api/v1/uploads/{file_path:path}")
+    async def serve_upload_file(file_path: str):
+        local_file = uploads_dir / file_path
+        if local_file.exists() and local_file.is_file():
+            mime, _ = mimetypes.guess_type(str(local_file))
+            return FileResponse(local_file, media_type=mime or "application/octet-stream")
+
+        # Fallback to MongoDB GridFS (for production/Vercel serverless persistence)
+        try:
+            from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+            from app.core.db import get_db
+
+            db = get_db()
+            fs = AsyncIOMotorGridFSBucket(db)
+            key = file_path.lstrip("/")
+            grid_out = await fs.open_download_stream_by_name(key)
+            contents = await grid_out.read()
+            mime, _ = mimetypes.guess_type(key)
+            return Response(
+                content=contents,
+                media_type=mime or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            )
+        except Exception:
+            raise ApiError(404, "NOT_FOUND", "Media file not found")
 
     return app
 
 
 app = create_app()
+

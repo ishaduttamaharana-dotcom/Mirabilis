@@ -86,7 +86,9 @@ async function uploadChunkedVideo(
   }
 
   const initRes = await api.post<{
+    isDirect?: boolean;
     uploadId: string;
+    key?: string;
     chunkSize: number;
     totalChunks: number;
     maxSizeMb: number;
@@ -97,94 +99,220 @@ async function uploadChunkedVideo(
     altText: file.name,
   });
 
-  const { uploadId, chunkSize, totalChunks } = initRes;
+  const { isDirect, uploadId, key, chunkSize, totalChunks } = initRes;
   const startTime = Date.now();
   let uploadedBytes = 0;
 
-  for (let i = 0; i < totalChunks; i++) {
-    if (options.signal?.aborted) {
-      try {
-        await api.delete(`/admin/media/upload/cancel/${uploadId}`);
-      } catch {
-        /* ignore cancel error */
+  if (isDirect && key) {
+    // DIRECT R2 MULTIPART UPLOAD FLOW (No video bytes pass through Vercel)
+    const completedParts: { PartNumber: number; ETag: string }[] = [];
+    const maxConcurrency = 3;
+
+    const uploadSinglePart = async (partNumber: number): Promise<{ PartNumber: number; ETag: string }> => {
+      const start = (partNumber - 1) * chunkSize;
+      const end = Math.min(start + chunkSize, totalBytes);
+      const chunkBlob = file.slice(start, end);
+
+      let attempt = 0;
+      const maxAttempts = 5;
+
+      while (attempt < maxAttempts) {
+        if (options.signal?.aborted) {
+          throw new Error("Upload cancelled");
+        }
+
+        try {
+          const partUrlRes = await api.post<{ url: string }>("/admin/media/upload/part-url", {
+            uploadId,
+            key,
+            partNumber,
+          });
+
+          const putRes = await fetch(partUrlRes.url, {
+            method: "PUT",
+            body: chunkBlob,
+          });
+
+          if (!putRes.ok) {
+            throw new Error(`Part ${partNumber} upload failed HTTP ${putRes.status}`);
+          }
+
+          const rawEtag = putRes.headers.get("ETag") || putRes.headers.get("etag") || "";
+          const etag = rawEtag.replace(/^"|"$/g, "");
+
+          return { PartNumber: partNumber, ETag: etag };
+        } catch (err: any) {
+          attempt++;
+          if (attempt >= maxAttempts) throw err;
+
+          let retryDelaySec = Math.pow(2, attempt);
+          if (err instanceof ApiClientError && err.status === 429 && err.retryAfter) {
+            retryDelaySec = err.retryAfter;
+          }
+
+          options.onProgress?.({
+            percent: Math.round((uploadedBytes / totalBytes) * 100),
+            uploadedBytes,
+            totalBytes,
+            speedBytesPerSec: 0,
+            etaSeconds: 0,
+            currentChunk: partNumber,
+            totalChunks,
+            status: "uploading",
+            throttled: true,
+            retryInSeconds: retryDelaySec,
+          });
+
+          await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+        }
       }
-      throw new Error("Upload cancelled");
-    }
 
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize, totalBytes);
-    const chunkBlob = file.slice(start, end);
+      throw new Error(`Part ${partNumber} failed after ${maxAttempts} attempts.`);
+    };
 
-    const formData = new FormData();
-    formData.append("uploadId", uploadId);
-    formData.append("chunkIndex", String(i));
-    formData.append("file", chunkBlob, `${file.name}.part${i}`);
-
-    let attempt = 0;
-    const maxAttempts = 5;
-    let success = false;
-
-    while (!success && attempt < maxAttempts) {
+    for (let i = 0; i < totalChunks; i += maxConcurrency) {
       if (options.signal?.aborted) {
+        try {
+          await api.delete(`/admin/media/upload/cancel/${uploadId}?key=${encodeURIComponent(key)}`);
+        } catch {}
         throw new Error("Upload cancelled");
       }
 
-      try {
-        await api.postForm("/admin/media/upload/chunk", formData);
-        success = true;
-      } catch (err: any) {
-        attempt++;
-        if (attempt >= maxAttempts) throw err;
-
-        let retryDelaySec = Math.pow(2, attempt);
-        if (err instanceof ApiClientError && err.status === 429 && err.retryAfter) {
-          retryDelaySec = err.retryAfter;
-        }
-
-        options.onProgress?.({
-          percent: Math.round((uploadedBytes / totalBytes) * 100),
-          uploadedBytes,
-          totalBytes,
-          speedBytesPerSec: 0,
-          etaSeconds: 0,
-          currentChunk: i + 1,
-          totalChunks,
-          status: "uploading",
-          throttled: true,
-          retryInSeconds: retryDelaySec,
-        });
-
-        await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+      const batchIndices = [];
+      for (let j = i; j < Math.min(i + maxConcurrency, totalChunks); j++) {
+        batchIndices.push(j + 1);
       }
+
+      const batchResults = await Promise.all(
+        batchIndices.map((partNum) => uploadSinglePart(partNum)),
+      );
+
+      for (const res of batchResults) {
+        completedParts.push(res);
+        const partIndex = res.PartNumber - 1;
+        const partEnd = Math.min((partIndex + 1) * chunkSize, totalBytes);
+        uploadedBytes = Math.max(uploadedBytes, partEnd);
+      }
+
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
+      const remainingBytes = totalBytes - uploadedBytes;
+      const etaSec = speed > 0 ? remainingBytes / speed : 0;
+
+      options.onProgress?.({
+        percent: Math.round((uploadedBytes / totalBytes) * 100),
+        uploadedBytes,
+        totalBytes,
+        speedBytesPerSec: speed,
+        etaSeconds: Math.round(etaSec),
+        currentChunk: Math.min(i + maxConcurrency, totalChunks),
+        totalChunks,
+        status: "uploading",
+        throttled: false,
+      });
     }
 
-    uploadedBytes = end;
-    const elapsedSec = (Date.now() - startTime) / 1000;
-    const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
-    const remainingBytes = totalBytes - uploadedBytes;
-    const etaSec = speed > 0 ? remainingBytes / speed : 0;
+    const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
+      "/admin/media/upload/complete",
+      {
+        uploadId,
+        key,
+        parts: completedParts,
+        filename: file.name,
+        mimeType: file.type || "video/mp4",
+        altText: file.name,
+        fileSize: totalBytes,
+      },
+    );
 
-    options.onProgress?.({
-      percent: Math.round((uploadedBytes / totalBytes) * 100),
-      uploadedBytes,
-      totalBytes,
-      speedBytesPerSec: speed,
-      etaSeconds: Math.round(etaSec),
-      currentChunk: i + 1,
-      totalChunks,
-      status: "uploading",
-      throttled: false,
-    });
+    const uploadedUrl = completeRes.publicUrl || completeRes.url;
+    if (!uploadedUrl) throw new Error("Upload completion failed");
+    return getMediaUrl(uploadedUrl);
+  } else {
+    // LOCAL DEV MODE CHUNK UPLOAD FALLBACK
+    for (let i = 0; i < totalChunks; i++) {
+      if (options.signal?.aborted) {
+        try {
+          await api.delete(`/admin/media/upload/cancel/${uploadId}`);
+        } catch {}
+        throw new Error("Upload cancelled");
+      }
+
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, totalBytes);
+      const chunkBlob = file.slice(start, end);
+
+      const formData = new FormData();
+      formData.append("uploadId", uploadId);
+      formData.append("chunkIndex", String(i));
+      formData.append("file", chunkBlob, `${file.name}.part${i}`);
+
+      let attempt = 0;
+      const maxAttempts = 5;
+      let success = false;
+
+      while (!success && attempt < maxAttempts) {
+        if (options.signal?.aborted) {
+          throw new Error("Upload cancelled");
+        }
+
+        try {
+          await api.postForm("/admin/media/upload/chunk", formData);
+          success = true;
+        } catch (err: any) {
+          attempt++;
+          if (attempt >= maxAttempts) throw err;
+
+          let retryDelaySec = Math.pow(2, attempt);
+          if (err instanceof ApiClientError && err.status === 429 && err.retryAfter) {
+            retryDelaySec = err.retryAfter;
+          }
+
+          options.onProgress?.({
+            percent: Math.round((uploadedBytes / totalBytes) * 100),
+            uploadedBytes,
+            totalBytes,
+            speedBytesPerSec: 0,
+            etaSeconds: 0,
+            currentChunk: i + 1,
+            totalChunks,
+            status: "uploading",
+            throttled: true,
+            retryInSeconds: retryDelaySec,
+          });
+
+          await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+        }
+      }
+
+      uploadedBytes = end;
+      const elapsedSec = (Date.now() - startTime) / 1000;
+      const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
+      const remainingBytes = totalBytes - uploadedBytes;
+      const etaSec = speed > 0 ? remainingBytes / speed : 0;
+
+      options.onProgress?.({
+        percent: Math.round((uploadedBytes / totalBytes) * 100),
+        uploadedBytes,
+        totalBytes,
+        speedBytesPerSec: speed,
+        etaSeconds: Math.round(etaSec),
+        currentChunk: i + 1,
+        totalChunks,
+        status: "uploading",
+        throttled: false,
+      });
+    }
+
+    const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
+      "/admin/media/upload/complete",
+      { uploadId },
+    );
+
+    const uploadedUrl = completeRes.publicUrl || completeRes.url;
+    if (!uploadedUrl) throw new Error("Upload completion failed");
+    return getMediaUrl(uploadedUrl);
   }
-
-  const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
-    "/admin/media/upload/complete",
-    { uploadId },
-  );
-
-  const uploadedUrl = completeRes.publicUrl || completeRes.url;
-  if (!uploadedUrl) throw new Error("Upload completion failed");
-  return getMediaUrl(uploadedUrl);
 }
 
 export function AdminMediaUploader({
@@ -242,7 +370,6 @@ export function AdminMediaUploader({
 
   // Helper to commit updated items
   async function notifyChange(newItems: MediaUploaderItem[]) {
-    // Recalculate sequence numbers
     const updated = newItems.map((item, idx) => ({
       ...item,
       sortOrder: idx + 1,
@@ -305,7 +432,7 @@ export function AdminMediaUploader({
         speedBytesPerSec: 0,
         etaSeconds: 0,
         currentChunk: 1,
-        totalChunks: Math.ceil(file.size / (20 * 1024 * 1024)),
+        totalChunks: Math.ceil(file.size / (16 * 1024 * 1024)),
         status: "uploading",
       });
 
@@ -325,23 +452,66 @@ export function AdminMediaUploader({
         setAbortController(null);
       }
     } else {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("altText", file.name);
-
-      const res = await api.postForm<{ publicUrl?: string; url?: string }>(
-        "/admin/media/upload",
-        formData,
-      );
-      const uploaded = res.publicUrl || res.url;
-      if (!uploaded) throw new Error("Upload failed");
-      return {
-        url: getMediaUrl(uploaded),
-        mediaType: "image",
+      const presign = await api.post<{
+        isDirect: boolean;
+        key?: string;
+        uploadUrl?: string;
+      }>("/admin/media/upload/presign", {
+        filename: file.name,
+        fileSize: file.size,
+        mimeType: file.type || "image/jpeg",
         altText: file.name,
-      };
+      });
+
+      if (presign.isDirect && presign.uploadUrl && presign.key) {
+        const putRes = await fetch(presign.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type || "image/jpeg" },
+          body: file,
+        });
+
+        if (!putRes.ok) {
+          throw new Error(`Direct R2 upload failed HTTP ${putRes.status}`);
+        }
+
+        const finalized = await api.post<{ publicUrl?: string; url?: string }>(
+          "/admin/media/upload/finalize",
+          {
+            key: presign.key,
+            filename: file.name,
+            fileSize: file.size,
+            mimeType: file.type || "image/jpeg",
+            altText: file.name,
+          },
+        );
+
+        const uploaded = finalized.publicUrl || finalized.url;
+        if (!uploaded) throw new Error("Upload finalization failed");
+        return {
+          url: getMediaUrl(uploaded),
+          mediaType: "image",
+          altText: file.name,
+        };
+      } else {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("altText", file.name);
+
+        const res = await api.postForm<{ publicUrl?: string; url?: string }>(
+          "/admin/media/upload",
+          formData,
+        );
+        const uploaded = res.publicUrl || res.url;
+        if (!uploaded) throw new Error("Upload failed");
+        return {
+          url: getMediaUrl(uploaded),
+          mediaType: "image",
+          altText: file.name,
+        };
+      }
     }
   }
+
 
   // Handle incoming FileList from drop or file input
   async function processFiles(files: FileList | File[]) {

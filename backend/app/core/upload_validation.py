@@ -9,45 +9,54 @@ import re
 from app.core.config import get_settings
 from app.utils.envelope import ApiError
 
-# extension -> (declared content-types accepted, magic-byte signature checker)
+
+def _is_video_container(b: bytes) -> bool:
+    if len(b) < 4:
+        return False
+    # Check common video container atom identifiers in the initial header (first 64 bytes)
+    atoms = (b"ftyp", b"moov", b"wide", b"mdat", b"free", b"skip", b"uuid")
+    header = b[:64]
+    return any(atom in header for atom in atoms)
+
+
+# extension -> magic-byte signature checker
 _MAGIC_CHECKS = {
-    "jpg": lambda b: len(b) >= 3 and b[:3] == b"\xff\xd8\xff",
-    "jpeg": lambda b: len(b) >= 3 and b[:3] == b"\xff\xd8\xff",
+    "jpg": lambda b: len(b) >= 2 and b[:2] == b"\xff\xd8",
+    "jpeg": lambda b: len(b) >= 2 and b[:2] == b"\xff\xd8",
     "png": lambda b: len(b) >= 8 and b[:8] == b"\x89PNG\r\n\x1a\n",
     "webp": lambda b: len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP",
-    "avif": lambda b: len(b) >= 12 and b[4:8] == b"ftyp" and b[8:12] in (b"avif", b"avis"),
-    "mp4": lambda b: len(b) >= 8 and (b[4:8] == b"ftyp" or b[:4] == b"ftyp"),
-    "mov": lambda b: len(b) >= 8 and (b[4:8] in (b"ftyp", b"moov", b"wide", b"mdat", b"free") or b[:4] in (b"moov", b"wide", b"mdat", b"free", b"ftyp")),
+    "avif": lambda b: len(b) >= 12 and (b[4:8] == b"ftyp" or b[:4] == b"ftyp") and b[8:12] in (b"avif", b"avis"),
+    "mp4": _is_video_container,
+    "mov": _is_video_container,
     "webm": lambda b: len(b) >= 4 and b[:4] == b"\x1a\x45\xdf\xa3",
     "pdf": lambda b: len(b) >= 5 and b[:5] == b"%PDF-",
 }
 
 _MIME_BY_EXT = {
-    "jpg": ["image/jpeg"],
-    "jpeg": ["image/jpeg"],
-    "png": ["image/png"],
+    "jpg": ["image/jpeg", "image/pjpeg", "image/jpg"],
+    "jpeg": ["image/jpeg", "image/pjpeg", "image/jpg"],
+    "png": ["image/png", "image/x-png"],
     "webp": ["image/webp"],
-    "avif": ["image/avif"],
-    "mp4": ["video/mp4", "video/x-m4v", "application/octet-stream"],
-    "mov": ["video/quicktime", "video/mov", "video/mp4", "application/octet-stream"],
-    "webm": ["video/webm", "application/octet-stream"],
-    "pdf": ["application/pdf"],
+    "avif": ["image/avif", "image/heic", "image/heif"],
+    "mp4": ["video/mp4", "video/x-m4v", "video/mp4v-es", "video/mpeg", "video/3gpp", "application/mp4", "application/octet-stream"],
+    "mov": ["video/quicktime", "video/mov", "video/mp4", "video/x-quicktime", "application/x-troff-msvideo", "application/octet-stream"],
+    "webm": ["video/webm", "video/x-webm", "application/octet-stream"],
+    "pdf": ["application/pdf", "application/x-pdf"],
 }
 
 _IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "avif"}
 _VIDEO_EXTS = {"mp4", "mov", "webm"}
 
-_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._ -]+$")
-
 
 def _extension(filename: str) -> str:
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if "/" in filename or "\\" in filename or ".." in filename or "\x00" in filename:
         raise ApiError(400, "INVALID_FILENAME", "Filename contains path-traversal characters")
-    if not _SAFE_FILENAME_RE.match(filename):
-        raise ApiError(400, "INVALID_FILENAME", "Filename contains disallowed characters")
     if "." not in filename:
         raise ApiError(400, "INVALID_FILE_TYPE", "File has no extension")
-    return filename.rsplit(".", 1)[-1].lower()
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if not ext or not ext.isalnum():
+        raise ApiError(400, "INVALID_FILE_TYPE", "File extension must be alphanumeric")
+    return ext
 
 
 def validate_upload_header(
@@ -64,7 +73,15 @@ def validate_upload_header(
         )
 
     expected_mimes = _MIME_BY_EXT[ext]
-    if declared_mime and declared_mime.lower() not in expected_mimes and declared_mime != "application/octet-stream":
+    mime_lower = declared_mime.lower() if declared_mime else ""
+    is_valid_mime = (
+        not mime_lower
+        or mime_lower in expected_mimes
+        or mime_lower == "application/octet-stream"
+        or (ext in _IMAGE_EXTS and mime_lower.startswith("image/"))
+        or (ext in _VIDEO_EXTS and mime_lower.startswith("video/"))
+    )
+    if not is_valid_mime:
         raise ApiError(
             400, "MIME_MISMATCH", f"Declared type '{declared_mime}' does not match extension '.{ext}'"
         )
@@ -108,6 +125,8 @@ def strip_image_metadata(content: bytes, ext: str) -> bytes:
         clean.putdata(list(img.getdata()))
         out = io.BytesIO()
         fmt = "JPEG" if ext in ("jpg", "jpeg") else ext.upper()
+        if fmt == "JPEG" and clean.mode in ("RGBA", "LA", "P", "PA"):
+            clean = clean.convert("RGB")
         clean.save(out, format=fmt)
         return out.getvalue()
     except Exception:
@@ -126,3 +145,4 @@ def probe_dimensions(content: bytes, ext: str) -> tuple[int | None, int | None]:
         return img.width, img.height
     except Exception:
         return None, None
+

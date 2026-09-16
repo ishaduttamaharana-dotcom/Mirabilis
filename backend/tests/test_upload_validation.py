@@ -41,8 +41,27 @@ def test_accepts_valid_jpeg():
     assert category == "images"
 
 
+def test_accepts_filenames_with_spaces_parentheses_and_symbols():
+    ext, category = validate_upload("my photo (1) [edited] +final.jpg", "image/jpg", _JPEG_HEADER)
+    assert ext == "jpg"
+    assert category == "images"
+
+
+def test_accepts_video_files_and_alternative_mimes():
+    mp4_header = b"\x00\x00\x00\x1cftypisom" + b"\x00" * 32
+    ext, category = validate_upload("sample_video (2).mp4", "video/mp4", mp4_header)
+    assert ext == "mp4"
+    assert category == "videos"
+
+    mov_header = b"\x00\x00\x00\x08wide" + b"\x00\x00\x00\x10mdat" + b"\x00" * 32
+    ext, category = validate_upload("vacation_clip.mov", "video/x-quicktime", mov_header)
+    assert ext == "mov"
+    assert category == "videos"
+
+
 def test_rejects_oversized_image():
     oversized = _PNG_HEADER + b"\x00" * (16 * 1024 * 1024)
     with pytest.raises(ApiError) as exc_info:
         validate_upload("big.png", "image/png", oversized)
     assert exc_info.value.code == "FILE_TOO_LARGE"
+

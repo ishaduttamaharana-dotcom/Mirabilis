@@ -84,15 +84,20 @@ async function tryRefresh(): Promise<boolean> {
         method: "POST",
         credentials: "include",
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        setAccessToken(null);
+        return false;
+      }
       const body = await res.json();
       const token = body?.data?.accessToken;
-      if (typeof token === "string") {
+      if (typeof token === "string" && token.trim() !== "") {
         setAccessToken(token);
         return true;
       }
+      setAccessToken(null);
       return false;
     } catch {
+      setAccessToken(null);
       return false;
     } finally {
       refreshInFlight = null;
@@ -111,9 +116,25 @@ interface RequestOptions {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, isFormData, skipAuthRetry } = options;
 
+  const isAuthRoute = path.startsWith("/auth/");
+  const isPublicRoute = path.startsWith("/public/");
+
+  // Auto-refresh access token if null in memory before calling protected endpoints
+  if (!accessToken && !isAuthRoute && !isPublicRoute && !skipAuthRetry) {
+    await tryRefresh();
+  }
+
   const headers: Record<string, string> = {};
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
   if (!isFormData && body !== undefined) headers["Content-Type"] = "application/json";
+
+  if (path.includes("upload")) {
+    console.log("[MEDIA UPLOAD DEBUG]", {
+      method,
+      endpoint: `${API_BASE_URL}${path}`,
+      accessTokenPresent: Boolean(accessToken),
+    });
+  }
 
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method,
@@ -122,7 +143,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     ...(body !== undefined ? { body: isFormData ? (body as FormData) : JSON.stringify(body) } : {}),
   });
 
-  if (res.status === 401 && !skipAuthRetry) {
+  if (res.status === 401 && !skipAuthRetry && !isAuthRoute) {
     const refreshed = await tryRefresh();
     if (refreshed) {
       return request<T>(path, { ...options, skipAuthRetry: true });
@@ -133,12 +154,25 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (!res.ok) {
     const err = payload?.error ?? {};
+    const message =
+      err.message ||
+      payload?.detail ||
+      (res.status === 401 ? "Session expired. Please log in again." : "Something went wrong");
+
+    const errorDetails = {
+      method,
+      endpoint: `${API_BASE_URL}${path}`,
+      status: res.status,
+      response: payload,
+    };
+    console.error(`[API ERROR] ${method} ${path} (${res.status}):`, errorDetails);
+
     throw new ApiClientError(
       res.status,
-      err.code ?? "UNKNOWN_ERROR",
-      err.message ?? "Something went wrong",
+      err.code ?? (res.status === 401 ? "UNAUTHORIZED" : "UNKNOWN_ERROR"),
+      message,
       err.fields,
-      err.details,
+      err.details || errorDetails,
     );
   }
 
@@ -146,12 +180,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
-  put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-  postForm: <T>(path: string, form: FormData) =>
-    request<T>(path, { method: "POST", body: form, isFormData: true }),
+  get: <T>(path: string, options?: RequestOptions) => request<T>(path, { method: "GET", ...options }),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>(path, { method: "POST", body, ...options }),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>(path, { method: "PUT", body, ...options }),
+  delete: <T>(path: string, options?: RequestOptions) =>
+    request<T>(path, { method: "DELETE", ...options }),
+  postForm: <T>(path: string, form: FormData, options?: RequestOptions) =>
+    request<T>(path, { method: "POST", body: form, isFormData: true, ...options }),
 };
 
 export function paginatedQuery<T>(

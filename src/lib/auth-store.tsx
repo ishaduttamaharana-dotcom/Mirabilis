@@ -59,7 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const bootstrap = useCallback(async () => {
     setStatus("loading");
     try {
-      const res = await api.post<{ accessToken: string }>("/auth/refresh");
+      const res = await api.post<{ accessToken: string }>("/auth/refresh", undefined, {
+        skipAuthRetry: true,
+      });
       setAccessToken(res.accessToken);
       try {
         const me = await api.get<AdminUser>("/auth/me");
@@ -69,6 +71,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setStatus("authenticated");
     } catch (err) {
+      setAccessToken(null);
+      setUser(null);
       if (err instanceof ApiClientError && err.status !== 401) {
         console.error("Session bootstrap failed", err);
       }

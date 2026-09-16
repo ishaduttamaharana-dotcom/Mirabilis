@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiClientError, getMediaUrl } from "@/lib/api-client";
@@ -195,6 +195,10 @@ export function AdminHeroSlideEditor({
   const [videoFileName, setVideoFileName] = useState("");
   const [videoAbortController, setVideoAbortController] = useState<AbortController | null>(null);
 
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
+  const posterFileInputRef = useRef<HTMLInputElement>(null);
+  const mobileFileInputRef = useRef<HTMLInputElement>(null);
+
   function formatMb(bytes: number): string {
     if (!bytes) return "0 MB";
     const mb = bytes / (1024 * 1024);
@@ -219,9 +223,10 @@ export function AdminHeroSlideEditor({
       );
     }
 
-    // Call init ONCE at start of upload
     const initRes = await api.post<{
+      isDirect?: boolean;
       uploadId: string;
+      key?: string;
       chunkSize: number;
       totalChunks: number;
       maxSizeMb: number;
@@ -232,99 +237,224 @@ export function AdminHeroSlideEditor({
       altText: file.name,
     });
 
-    const { uploadId, chunkSize, totalChunks } = initRes;
+    const { isDirect, uploadId, key, chunkSize, totalChunks } = initRes;
     const startTime = Date.now();
     let uploadedBytes = 0;
 
-    for (let i = 0; i < totalChunks; i++) {
-      if (options.signal?.aborted) {
-        try {
-          await api.delete(`/admin/media/upload/cancel/${uploadId}`);
-        } catch {
-          /* ignore cancel error */
+    if (isDirect && key) {
+      const completedParts: { PartNumber: number; ETag: string }[] = [];
+      const maxConcurrency = 3;
+
+      const uploadSinglePart = async (partNumber: number): Promise<{ PartNumber: number; ETag: string }> => {
+        const start = (partNumber - 1) * chunkSize;
+        const end = Math.min(start + chunkSize, totalBytes);
+        const chunkBlob = file.slice(start, end);
+
+        let attempt = 0;
+        const maxAttempts = 5;
+
+        while (attempt < maxAttempts) {
+          if (options.signal?.aborted) {
+            throw new Error("Upload cancelled");
+          }
+
+          try {
+            const partUrlRes = await api.post<{ url: string }>("/admin/media/upload/part-url", {
+              uploadId,
+              key,
+              partNumber,
+            });
+
+            const putRes = await fetch(partUrlRes.url, {
+              method: "PUT",
+              body: chunkBlob,
+            });
+
+            if (!putRes.ok) {
+              throw new Error(`Part ${partNumber} upload failed HTTP ${putRes.status}`);
+            }
+
+            const rawEtag = putRes.headers.get("ETag") || putRes.headers.get("etag") || "";
+            const etag = rawEtag.replace(/^"|"$/g, "");
+
+            return { PartNumber: partNumber, ETag: etag };
+          } catch (err: any) {
+            attempt++;
+            if (attempt >= maxAttempts) throw err;
+
+            let retryDelaySec = Math.pow(2, attempt);
+            if (err instanceof ApiClientError && err.status === 429 && err.retryAfter) {
+              retryDelaySec = err.retryAfter;
+            }
+
+            options.onProgress?.({
+              percent: Math.round((uploadedBytes / totalBytes) * 100),
+              uploadedBytes,
+              totalBytes,
+              speedBytesPerSec: 0,
+              etaSeconds: 0,
+              currentChunk: partNumber,
+              totalChunks,
+              status: "uploading",
+              throttled: true,
+              retryInSeconds: retryDelaySec,
+            });
+
+            await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+          }
         }
-        throw new Error("Upload cancelled");
-      }
 
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize, totalBytes);
-      const chunkBlob = file.slice(start, end);
+        throw new Error(`Part ${partNumber} failed after ${maxAttempts} attempts.`);
+      };
 
-      const formData = new FormData();
-      formData.append("uploadId", uploadId);
-      formData.append("chunkIndex", String(i));
-      formData.append("file", chunkBlob, `${file.name}.part${i}`);
-
-      // Retry chunk loop with exponential backoff & 429 Retry-After handling
-      let attempt = 0;
-      const maxAttempts = 5;
-      let success = false;
-
-      while (!success && attempt < maxAttempts) {
+      for (let i = 0; i < totalChunks; i += maxConcurrency) {
         if (options.signal?.aborted) {
+          try {
+            await api.delete(`/admin/media/upload/cancel/${uploadId}?key=${encodeURIComponent(key)}`);
+          } catch {}
           throw new Error("Upload cancelled");
         }
 
-        try {
-          await api.postForm("/admin/media/upload/chunk", formData);
-          success = true;
-        } catch (err: any) {
-          attempt++;
-          if (attempt >= maxAttempts) {
-            throw err;
-          }
-
-          let retryDelaySec = Math.pow(2, attempt);
-          if (err instanceof ApiClientError && err.status === 429) {
-            if (err.retryAfter && typeof err.retryAfter === "number") {
-              retryDelaySec = err.retryAfter;
-            }
-          }
-
-          options.onProgress?.({
-            percent: Math.round((uploadedBytes / totalBytes) * 100),
-            uploadedBytes,
-            totalBytes,
-            speedBytesPerSec: 0,
-            etaSeconds: 0,
-            currentChunk: i + 1,
-            totalChunks,
-            status: "uploading",
-            throttled: true,
-            retryInSeconds: retryDelaySec,
-          });
-
-          await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+        const batchIndices = [];
+        for (let j = i; j < Math.min(i + maxConcurrency, totalChunks); j++) {
+          batchIndices.push(j + 1);
         }
+
+        const batchResults = await Promise.all(
+          batchIndices.map((partNum) => uploadSinglePart(partNum)),
+        );
+
+        for (const res of batchResults) {
+          completedParts.push(res);
+          const partIndex = res.PartNumber - 1;
+          const partEnd = Math.min((partIndex + 1) * chunkSize, totalBytes);
+          uploadedBytes = Math.max(uploadedBytes, partEnd);
+        }
+
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
+        const remainingBytes = totalBytes - uploadedBytes;
+        const etaSec = speed > 0 ? remainingBytes / speed : 0;
+
+        options.onProgress?.({
+          percent: Math.round((uploadedBytes / totalBytes) * 100),
+          uploadedBytes,
+          totalBytes,
+          speedBytesPerSec: speed,
+          etaSeconds: Math.round(etaSec),
+          currentChunk: Math.min(i + maxConcurrency, totalChunks),
+          totalChunks,
+          status: "uploading",
+          throttled: false,
+        });
       }
 
-      uploadedBytes = end;
-      const elapsedSec = (Date.now() - startTime) / 1000;
-      const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
-      const remainingBytes = totalBytes - uploadedBytes;
-      const etaSec = speed > 0 ? remainingBytes / speed : 0;
+      const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
+        "/admin/media/upload/complete",
+        {
+          uploadId,
+          key,
+          parts: completedParts,
+          filename: file.name,
+          mimeType: file.type || "video/mp4",
+          altText: file.name,
+          fileSize: totalBytes,
+        },
+      );
 
-      options.onProgress?.({
-        percent: Math.round((uploadedBytes / totalBytes) * 100),
-        uploadedBytes,
-        totalBytes,
-        speedBytesPerSec: speed,
-        etaSeconds: Math.round(etaSec),
-        currentChunk: i + 1,
-        totalChunks,
-        status: "uploading",
-        throttled: false,
-      });
+      const uploadedUrl = completeRes.publicUrl || completeRes.url;
+      if (!uploadedUrl) throw new Error("Upload completion failed");
+      return getMediaUrl(uploadedUrl);
+    } else {
+      for (let i = 0; i < totalChunks; i++) {
+        if (options.signal?.aborted) {
+          try {
+            await api.delete(`/admin/media/upload/cancel/${uploadId}`);
+          } catch {
+            /* ignore cancel error */
+          }
+          throw new Error("Upload cancelled");
+        }
+
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, totalBytes);
+        const chunkBlob = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("uploadId", uploadId);
+        formData.append("chunkIndex", String(i));
+        formData.append("file", chunkBlob, `${file.name}.part${i}`);
+
+        let attempt = 0;
+        const maxAttempts = 5;
+        let success = false;
+
+        while (!success && attempt < maxAttempts) {
+          if (options.signal?.aborted) {
+            throw new Error("Upload cancelled");
+          }
+
+          try {
+            await api.postForm("/admin/media/upload/chunk", formData);
+            success = true;
+          } catch (err: any) {
+            attempt++;
+            if (attempt >= maxAttempts) {
+              throw err;
+            }
+
+            let retryDelaySec = Math.pow(2, attempt);
+            if (err instanceof ApiClientError && err.status === 429) {
+              if (err.retryAfter && typeof err.retryAfter === "number") {
+                retryDelaySec = err.retryAfter;
+              }
+            }
+
+            options.onProgress?.({
+              percent: Math.round((uploadedBytes / totalBytes) * 100),
+              uploadedBytes,
+              totalBytes,
+              speedBytesPerSec: 0,
+              etaSeconds: 0,
+              currentChunk: i + 1,
+              totalChunks,
+              status: "uploading",
+              throttled: true,
+              retryInSeconds: retryDelaySec,
+            });
+
+            await new Promise((res) => setTimeout(res, retryDelaySec * 1000));
+          }
+        }
+
+        uploadedBytes = end;
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const speed = elapsedSec > 0 ? uploadedBytes / elapsedSec : 0;
+        const remainingBytes = totalBytes - uploadedBytes;
+        const etaSec = speed > 0 ? remainingBytes / speed : 0;
+
+        options.onProgress?.({
+          percent: Math.round((uploadedBytes / totalBytes) * 100),
+          uploadedBytes,
+          totalBytes,
+          speedBytesPerSec: speed,
+          etaSeconds: Math.round(etaSec),
+          currentChunk: i + 1,
+          totalChunks,
+          status: "uploading",
+          throttled: false,
+        });
+      }
+
+      const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
+        "/admin/media/upload/complete",
+        { uploadId },
+      );
+
+      const uploadedUrl = completeRes.publicUrl || completeRes.url;
+      if (!uploadedUrl) throw new Error("Upload completion failed");
+      return getMediaUrl(uploadedUrl);
     }
-
-    const completeRes = await api.post<{ publicUrl?: string; url?: string }>(
-      "/admin/media/upload/complete",
-      { uploadId },
-    );
-
-    const uploadedUrl = completeRes.publicUrl || completeRes.url;
-    if (!uploadedUrl) throw new Error("Upload completion failed");
-    return getMediaUrl(uploadedUrl);
   }
 
   async function handleVideoUploadSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -785,24 +915,26 @@ export function AdminHeroSlideEditor({
                         onChange={(e) => setVideoUrl(e.target.value)}
                         placeholder="https://.../hero.mp4 or select file below"
                       />
-                      <label className="cursor-pointer">
-                        <Button type="button" variant="outline" disabled={uploadingVideo} asChild>
-                          <span>
-                            <Video className="mr-1.5 h-3.5 w-3.5" />
-                            {uploadingVideo
-                              ? "Uploading…"
-                              : videoUrl
-                                ? "Replace Video"
-                                : "Select Video"}
-                          </span>
-                        </Button>
-                        <input
-                          type="file"
-                          accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
-                          className="hidden"
-                          onChange={handleVideoUploadSelected}
-                        />
-                      </label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={uploadingVideo}
+                        onClick={() => videoFileInputRef.current?.click()}
+                      >
+                        <Video className="mr-1.5 h-3.5 w-3.5" />
+                        {uploadingVideo
+                          ? "Uploading…"
+                          : videoUrl
+                            ? "Replace Video"
+                            : "Select Video"}
+                      </Button>
+                      <input
+                        ref={videoFileInputRef}
+                        type="file"
+                        accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+                        className="hidden"
+                        onChange={handleVideoUploadSelected}
+                      />
                       {videoUrl && (
                         <Button
                           type="button"
@@ -883,26 +1015,23 @@ export function AdminHeroSlideEditor({
                         onChange={(e) => setPosterUrl(e.target.value)}
                         placeholder="Fallback image if video fails"
                       />
-                      <label className="cursor-pointer">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={uploading}
-                          asChild
-                        >
-                          <span>
-                            <Upload className="mr-1.5 h-3.5 w-3.5" />
-                            Upload Poster
-                          </span>
-                        </Button>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => handleMediaUpload(e, setPosterUrl)}
-                        />
-                      </label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={uploading}
+                        onClick={() => posterFileInputRef.current?.click()}
+                      >
+                        <Upload className="mr-1.5 h-3.5 w-3.5" />
+                        Upload Poster
+                      </Button>
+                      <input
+                        ref={posterFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handleMediaUpload(e, setPosterUrl)}
+                      />
                     </div>
                   </div>
 
@@ -954,20 +1083,23 @@ export function AdminHeroSlideEditor({
                     onChange={(e) => setMobileImageUrl(e.target.value)}
                     placeholder="Separate mobile image/video URL"
                   />
-                  <label className="cursor-pointer">
-                    <Button type="button" variant="outline" size="sm" disabled={uploading} asChild>
-                      <span>
-                        <Upload className="mr-1.5 h-3.5 w-3.5" />
-                        Upload Mobile
-                      </span>
-                    </Button>
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      className="hidden"
-                      onChange={(e) => handleMediaUpload(e, setMobileImageUrl)}
-                    />
-                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploading}
+                    onClick={() => mobileFileInputRef.current?.click()}
+                  >
+                    <Upload className="mr-1.5 h-3.5 w-3.5" />
+                    Upload Mobile
+                  </Button>
+                  <input
+                    ref={mobileFileInputRef}
+                    type="file"
+                    accept="image/*,video/*"
+                    className="hidden"
+                    onChange={(e) => handleMediaUpload(e, setMobileImageUrl)}
+                  />
                 </div>
               </div>
             </AccordionContent>

@@ -49,14 +49,27 @@ class Settings(BaseSettings):
         return ["*"]
 
     # Storage
-    storage_driver: str = "local"  # local | s3
+    storage_driver: str = "local"  # local | r2 | s3 | gridfs
     storage_local_path: str = "backend/uploads"
+
+    # Cloudflare R2 configuration
+    r2_account_id: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_public_base_url: str | None = None
+    r2_region: str = "auto"
+
+    # S3 configuration
     s3_bucket: str | None = None
     s3_region: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_endpoint_url: str | None = None
+    s3_public_domain: str | None = None
 
     # Upload limits (MB)
+
     upload_max_image_mb: int = 15
     upload_max_video_mb: int = 1000
     upload_max_pdf_mb: int = 20
