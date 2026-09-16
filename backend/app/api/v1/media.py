@@ -232,9 +232,8 @@ async def init_upload(
         _cleanup_abandoned_chunks()
         upload_id = f"sess_{uuid.uuid4().hex}"
         total_chunks = max(1, math.ceil(req.fileSize / CHUNK_SIZE_BYTES))
-        sess_dir = _temp_chunks_dir() / upload_id
-        sess_dir.mkdir(parents=True, exist_ok=True)
         meta = {
+            "_id": upload_id,
             "uploadId": upload_id,
             "filename": req.filename,
             "fileSize": req.fileSize,
@@ -247,7 +246,22 @@ async def init_upload(
             "chunkSize": CHUNK_SIZE_BYTES,
             "createdAt": time.time(),
         }
-        (sess_dir / "session.json").write_text(json.dumps(meta), encoding="utf-8")
+
+        # 1. Persist session statelessly in MongoDB for serverless instance resilience
+        try:
+            db = get_db()
+            await db["upload_sessions"].replace_one({"_id": upload_id}, meta, upsert=True)
+        except Exception as e:
+            print(f"[MEDIA INIT DB WARNING] {e}")
+
+        # 2. Local /tmp fallback
+        try:
+            sess_dir = _temp_chunks_dir() / upload_id
+            sess_dir.mkdir(parents=True, exist_ok=True)
+            (sess_dir / "session.json").write_text(json.dumps(meta), encoding="utf-8")
+        except Exception:
+            pass
+
         return data({
             "isDirect": False,
             "uploadId": upload_id,
@@ -283,14 +297,33 @@ async def upload_chunk(
     file: UploadFile = File(...),
     _: CurrentUser = Depends(require_editor),
 ):
-    sess_dir = _temp_chunks_dir() / uploadId
-    meta_path = sess_dir / "session.json"
-    if not sess_dir.exists() or not meta_path.exists():
-        raise ApiError(404, "SESSION_NOT_FOUND", "Upload session expired or does not exist")
-
-    chunk_path = sess_dir / f"chunk_{chunkIndex}.bin"
     chunk_content = await file.read()
-    chunk_path.write_bytes(chunk_content)
+
+    # 1. Store chunk binary statelessly in MongoDB
+    try:
+        db = get_db()
+        await db["upload_chunks"].replace_one(
+            {"uploadId": uploadId, "chunkIndex": chunkIndex},
+            {
+                "uploadId": uploadId,
+                "chunkIndex": chunkIndex,
+                "bytes": len(chunk_content),
+                "data": chunk_content,
+                "createdAt": time.time(),
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"[MEDIA CHUNK DB WARNING] {e}")
+
+    # 2. Local /tmp fallback
+    try:
+        sess_dir = _temp_chunks_dir() / uploadId
+        if sess_dir.exists():
+            chunk_path = sess_dir / f"chunk_{chunkIndex}.bin"
+            chunk_path.write_bytes(chunk_content)
+    except Exception:
+        pass
 
     return data({
         "uploadId": uploadId,
@@ -305,6 +338,19 @@ async def get_chunk_status(
     upload_id: str,
     _: CurrentUser = Depends(require_viewer),
 ):
+    db = get_db()
+    sess = await db["upload_sessions"].find_one({"_id": upload_id})
+    if sess:
+        chunks = await db["upload_chunks"].find({"uploadId": upload_id}).to_list(length=1000)
+        completed = [c["chunkIndex"] for c in chunks]
+        total = sess["totalChunks"]
+        return data({
+            "uploadId": upload_id,
+            "totalChunks": total,
+            "completedChunks": completed,
+            "progressPercent": round((len(completed) / total) * 100) if total else 0,
+        })
+
     sess_dir = _temp_chunks_dir() / upload_id
     meta_path = sess_dir / "session.json"
     if not sess_dir.exists() or not meta_path.exists():
@@ -335,6 +381,12 @@ async def cancel_upload(
     if storage.is_direct_upload_supported() and key:
         await storage.abort_multipart_upload(key=key, upload_id=upload_id)
     else:
+        try:
+            db = get_db()
+            await db["upload_sessions"].delete_one({"_id": upload_id})
+            await db["upload_chunks"].delete_many({"uploadId": upload_id})
+        except Exception:
+            pass
         sess_dir = _temp_chunks_dir() / upload_id
         if sess_dir.exists():
             shutil.rmtree(sess_dir, ignore_errors=True)
@@ -347,7 +399,10 @@ async def complete_upload(
     req: UploadCompleteRequest,
     user: CurrentUser = Depends(require_editor),
 ):
+    import traceback
     storage = get_storage_adapter()
+    print(f"[MEDIA COMPLETE DEBUG] upload_id={req.uploadId} key={req.key} is_direct={storage.is_direct_upload_supported()}")
+
     if storage.is_direct_upload_supported() and req.key:
         if ".." in req.key or req.key.startswith("/") or "\\" in req.key:
             raise ApiError(400, "INVALID_KEY", "Invalid object key format")
@@ -377,73 +432,98 @@ async def complete_upload(
         )
         return data(_serialize(doc))
     else:
-        # Legacy local session complete fallback
+        # Stateless MongoDB chunk complete (with local /tmp fallback)
+        db = get_db()
+        meta = None
+
+        # 1. Retrieve session from MongoDB
+        try:
+            sess_doc = await db["upload_sessions"].find_one({"_id": req.uploadId})
+            if sess_doc:
+                meta = sess_doc
+        except Exception as e:
+            print(f"[MEDIA COMPLETE SESSION DB SEARCH WARNING] {e}")
+
+        # 2. Fallback to local /tmp session
         sess_dir = _temp_chunks_dir() / req.uploadId
-        meta_path = sess_dir / "session.json"
-        if not sess_dir.exists() or not meta_path.exists():
+        if not meta and sess_dir.exists():
+            meta_path = sess_dir / "session.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+        if not meta:
             raise ApiError(404, "SESSION_NOT_FOUND", "Upload session expired or invalid")
 
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        total_chunks = meta["totalChunks"]
-        missing = [i for i in range(total_chunks) if not (sess_dir / f"chunk_{i}.bin").exists()]
-        if missing:
-            raise ApiError(400, "INCOMPLETE_UPLOAD", f"Missing {len(missing)} chunk(s): {missing[:5]}")
+        total_chunks = meta.get("totalChunks", 1)
 
-        settings = get_settings()
-        base_dir = Path(settings.storage_local_path) / meta["category"]
-        base_dir.mkdir(parents=True, exist_ok=True)
-        filename = generate_filename(meta["ext"])
-        target_path = base_dir / filename
-
-        first_chunk = (sess_dir / "chunk_0.bin").read_bytes()[:64]
-        ext = meta["ext"]
-        if first_chunk and ext in _MAGIC_CHECKS and not _MAGIC_CHECKS[ext](first_chunk):
-            shutil.rmtree(sess_dir, ignore_errors=True)
-            raise ApiError(400, "SIGNATURE_MISMATCH", f"File signature does not match expected '.{ext}' format")
-
-        key = ""
-        file_size = 0
+        # Retrieve chunks from MongoDB
+        chunk_map: dict[int, bytes] = {}
         try:
-            settings = get_settings()
-            base_dir = Path(settings.storage_local_path) / meta["category"]
-            base_dir.mkdir(parents=True, exist_ok=True)
-            filename = generate_filename(meta["ext"])
-            target_path = base_dir / filename
+            db_chunks = await db["upload_chunks"].find({"uploadId": req.uploadId}).to_list(length=1000)
+            for c in db_chunks:
+                chunk_map[c["chunkIndex"]] = c["data"]
+        except Exception as e:
+            print(f"[MEDIA COMPLETE CHUNKS DB SEARCH WARNING] {e}")
 
-            with target_path.open("wb") as out_f:
-                for i in range(total_chunks):
-                    chunk_file = sess_dir / f"chunk_{i}.bin"
-                    with chunk_file.open("rb") as in_f:
-                        shutil.copyfileobj(in_f, out_f, length=1024 * 1024)
-
-            key = f"{meta['category']}/{filename}"
-            file_size = target_path.stat().st_size
-        except OSError:
-            # Serverless fallback: Assemble chunks in memory & store directly into GridFS
-            from app.services.storage import GridFSStorageAdapter
-            full_bytes = bytearray()
+        # Fallback to local /tmp chunk files
+        if sess_dir.exists():
             for i in range(total_chunks):
-                chunk_file = sess_dir / f"chunk_{i}.bin"
-                full_bytes.extend(chunk_file.read_bytes())
-            gridfs = GridFSStorageAdapter()
-            key = await gridfs.save(meta["category"], meta["ext"], bytes(full_bytes))
+                if i not in chunk_map:
+                    chunk_path = sess_dir / f"chunk_{i}.bin"
+                    if chunk_path.exists():
+                        chunk_map[i] = chunk_path.read_bytes()
+
+        missing = [i for i in range(total_chunks) if i not in chunk_map]
+        if missing:
+            raise ApiError(400, "INCOMPLETE_UPLOAD", f"Upload incomplete: chunk {missing[0]} is missing.")
+
+        # Assemble file sequentially in exact index order (0..total_chunks - 1)
+        full_bytes = bytearray()
+        for i in range(total_chunks):
+            full_bytes.extend(chunk_map[i])
+
+        ext = meta.get("ext", "mp4")
+        first_chunk = bytes(full_bytes[:64])
+        from app.core.upload_validation import _MAGIC_CHECKS, _VIDEO_EXTS
+        if first_chunk and ext in _MAGIC_CHECKS and not _MAGIC_CHECKS[ext](first_chunk):
+            if not (ext in _VIDEO_EXTS and (not meta.get("mimeType") or meta["mimeType"].startswith("video/"))):
+                raise ApiError(400, "SIGNATURE_MISMATCH", f"File signature does not match expected '.{ext}' format")
+
+        try:
+            # Store assembled media using storage adapter (local or GridFS)
+            category = meta.get("category", "videos")
+            key = await storage.save(category, ext, bytes(full_bytes))
             file_size = len(full_bytes)
 
-        shutil.rmtree(sess_dir, ignore_errors=True)
+            # Cleanup temporary session & chunks
+            try:
+                await db["upload_sessions"].delete_one({"_id": req.uploadId})
+                await db["upload_chunks"].delete_many({"uploadId": req.uploadId})
+            except Exception:
+                pass
+            if sess_dir.exists():
+                shutil.rmtree(sess_dir, ignore_errors=True)
 
-        db = get_db()
-        media_repo = MediaRepository(db)
-        doc = await media_repo.create(
-            key=key,
-            category=meta["category"],
-            mime_type=meta["mimeType"] or f"video/{meta['ext']}",
-            size=file_size,
-            alt_text=meta.get("altText", ""),
-            uploaded_by=meta.get("uploadedBy", "admin"),
-            width=None,
-            height=None,
-        )
-        return data(_serialize(doc))
+            media_repo = MediaRepository(db)
+            doc = await media_repo.create(
+                key=key,
+                category=category,
+                mime_type=meta.get("mimeType") or f"video/{ext}",
+                size=file_size,
+                alt_text=meta.get("altText", ""),
+                uploaded_by=meta.get("uploadedBy", "admin"),
+                width=None,
+                height=None,
+            )
+            return data(_serialize(doc))
+        except ApiError:
+            raise
+        except Exception as err:
+            print(f"[MEDIA COMPLETE ERROR TRACEBACK]\n{traceback.format_exc()}")
+            raise ApiError(500, "COMPLETE_FAILED", f"Upload completion failed: {str(err)}")
 
 
 @router.post("/upload", dependencies=[_upload_rate_limit])
