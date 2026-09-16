@@ -472,6 +472,7 @@ export function AdminHeroSlideEditor({
     const controller = new AbortController();
     setVideoAbortController(controller);
 
+    const defaultChunkSize = 3 * 1024 * 1024;
     setVideoProgress({
       percent: 0,
       uploadedBytes: 0,
@@ -479,7 +480,7 @@ export function AdminHeroSlideEditor({
       speedBytesPerSec: 0,
       etaSeconds: 0,
       currentChunk: 1,
-      totalChunks: Math.ceil(file.size / (20 * 1024 * 1024)),
+      totalChunks: Math.ceil(file.size / defaultChunkSize),
       status: "uploading",
     });
 
@@ -495,8 +496,8 @@ export function AdminHeroSlideEditor({
         totalBytes: file.size,
         speedBytesPerSec: 0,
         etaSeconds: 0,
-        currentChunk: Math.ceil(file.size / (20 * 1024 * 1024)),
-        totalChunks: Math.ceil(file.size / (20 * 1024 * 1024)),
+        currentChunk: Math.ceil(file.size / defaultChunkSize),
+        totalChunks: Math.ceil(file.size / defaultChunkSize),
         status: "completed",
       });
       toast.success("Video uploaded successfully!");
@@ -515,7 +516,7 @@ export function AdminHeroSlideEditor({
           speedBytesPerSec: 0,
           etaSeconds: 0,
           currentChunk: 1,
-          totalChunks: Math.ceil(file.size / (20 * 1024 * 1024)),
+          totalChunks: Math.ceil(file.size / defaultChunkSize),
           status: "error",
           errorMessage: msg,
         });
@@ -532,8 +533,12 @@ export function AdminHeroSlideEditor({
     }
   }
 
-  // Media upload helper
+  // Media upload helper (uses chunked upload for files > 3MB to bypass Vercel serverless payload limits)
   async function uploadFile(file: File): Promise<string> {
+    if (file.size > 3 * 1024 * 1024) {
+      return uploadChunkedVideo(file, {});
+    }
+
     const formData = new FormData();
     formData.append("file", file);
     formData.append("altText", file.name);

@@ -38,8 +38,8 @@ _upload_rate_limit = Depends(rate_limit("media-upload", 100))
 _sess_rate_limit = Depends(rate_limit("media-sess", 60))
 _chunk_rate_limit = Depends(rate_limit("media-chunk", 1200))
 
-CHUNK_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB per chunk for local fallback
-MULTIPART_PART_SIZE_BYTES = 16 * 1024 * 1024  # 16 MiB per part for direct R2 upload
+CHUNK_SIZE_BYTES = 3 * 1024 * 1024  # 3 MB per chunk for serverless/local fallback (Vercel payload limit is 4.5MB)
+MULTIPART_PART_SIZE_BYTES = 5 * 1024 * 1024  # 5 MiB minimum per part for direct R2 upload
 
 
 def _temp_chunks_dir() -> Path:

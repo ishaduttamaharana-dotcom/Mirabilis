@@ -13,9 +13,9 @@ from app.utils.envelope import ApiError
 def _is_video_container(b: bytes) -> bool:
     if len(b) < 4:
         return False
-    # Check common video container atom identifiers in the initial header (first 64 bytes)
-    atoms = (b"ftyp", b"moov", b"wide", b"mdat", b"free", b"skip", b"uuid")
-    header = b[:64]
+    # Check common video container atom identifiers in the initial header (first 512 bytes)
+    atoms = (b"ftyp", b"moov", b"wide", b"mdat", b"free", b"skip", b"uuid", b"\x1a\x45\xdf\xa3", b"RIFF", b"FLV", b"OggS")
+    header = b[:512]
     return any(atom in header for atom in atoms)
 
 
@@ -26,9 +26,25 @@ _MAGIC_CHECKS = {
     "png": lambda b: len(b) >= 8 and b[:8] == b"\x89PNG\r\n\x1a\n",
     "webp": lambda b: len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP",
     "avif": lambda b: len(b) >= 12 and (b[4:8] == b"ftyp" or b[:4] == b"ftyp") and b[8:12] in (b"avif", b"avis"),
+    "gif": lambda b: len(b) >= 6 and (b[:6] == b"GIF87a" or b[:6] == b"GIF89a"),
+    "bmp": lambda b: len(b) >= 2 and b[:2] == b"BM",
+    "tiff": lambda b: len(b) >= 4 and (b[:4] == b"II*\x00" or b[:4] == b"MM\x00*"),
+    "tif": lambda b: len(b) >= 4 and (b[:4] == b"II*\x00" or b[:4] == b"MM\x00*"),
+    "ico": lambda b: len(b) >= 4 and b[:4] == b"\x00\x00\x01\x00",
+    "svg": lambda b: True,
+    "heic": lambda b: len(b) >= 12 and (b[4:8] == b"ftyp" or b[:4] == b"ftyp"),
+    "heif": lambda b: len(b) >= 12 and (b[4:8] == b"ftyp" or b[:4] == b"ftyp"),
     "mp4": _is_video_container,
     "mov": _is_video_container,
-    "webm": lambda b: len(b) >= 4 and b[:4] == b"\x1a\x45\xdf\xa3",
+    "webm": lambda b: len(b) >= 4 and (b[:4] == b"\x1a\x45\xdf\xa3" or _is_video_container(b)),
+    "m4v": _is_video_container,
+    "avi": _is_video_container,
+    "mkv": lambda b: len(b) >= 4 and (b[:4] == b"\x1a\x45\xdf\xa3" or _is_video_container(b)),
+    "wmv": _is_video_container,
+    "flv": _is_video_container,
+    "3gp": _is_video_container,
+    "ts": lambda b: True,
+    "m2ts": lambda b: True,
     "pdf": lambda b: len(b) >= 5 and b[:5] == b"%PDF-",
 }
 
@@ -38,14 +54,30 @@ _MIME_BY_EXT = {
     "png": ["image/png", "image/x-png"],
     "webp": ["image/webp"],
     "avif": ["image/avif", "image/heic", "image/heif"],
+    "gif": ["image/gif"],
+    "bmp": ["image/bmp", "image/x-ms-bmp"],
+    "tiff": ["image/tiff"],
+    "tif": ["image/tiff"],
+    "ico": ["image/x-icon", "image/vnd.microsoft.icon", "image/icon"],
+    "svg": ["image/svg+xml", "text/xml", "application/xml"],
+    "heic": ["image/heic", "image/heif"],
+    "heif": ["image/heif", "image/heic"],
     "mp4": ["video/mp4", "video/x-m4v", "video/mp4v-es", "video/mpeg", "video/3gpp", "application/mp4", "application/octet-stream"],
     "mov": ["video/quicktime", "video/mov", "video/mp4", "video/x-quicktime", "application/x-troff-msvideo", "application/octet-stream"],
     "webm": ["video/webm", "video/x-webm", "application/octet-stream"],
+    "m4v": ["video/x-m4v", "video/mp4", "application/octet-stream"],
+    "avi": ["video/x-msvideo", "video/avi", "application/x-troff-msvideo", "application/octet-stream"],
+    "mkv": ["video/x-matroska", "video/mkv", "application/octet-stream"],
+    "wmv": ["video/x-ms-wmv", "application/octet-stream"],
+    "flv": ["video/x-flv", "application/octet-stream"],
+    "3gp": ["video/3gpp", "video/3gp", "application/octet-stream"],
+    "ts": ["video/mp2t", "application/octet-stream"],
+    "m2ts": ["video/mp2t", "application/octet-stream"],
     "pdf": ["application/pdf", "application/x-pdf"],
 }
 
-_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "avif"}
-_VIDEO_EXTS = {"mp4", "mov", "webm"}
+_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "avif", "gif", "bmp", "tiff", "tif", "ico", "svg", "heic", "heif"}
+_VIDEO_EXTS = {"mp4", "mov", "webm", "m4v", "avi", "mkv", "wmv", "flv", "3gp", "ts", "m2ts"}
 
 
 def _extension(filename: str) -> str:
@@ -69,10 +101,10 @@ def validate_upload_header(
         raise ApiError(
             400,
             "INVALID_FILE_TYPE",
-            f"'.{ext}' is not an allowed upload type (jpg, jpeg, png, webp, avif, mp4, mov, webm, pdf)",
+            f"'.{ext}' is not an allowed upload type",
         )
 
-    expected_mimes = _MIME_BY_EXT[ext]
+    expected_mimes = _MIME_BY_EXT.get(ext, [])
     mime_lower = declared_mime.lower() if declared_mime else ""
     is_valid_mime = (
         not mime_lower
@@ -87,7 +119,9 @@ def validate_upload_header(
         )
 
     if first_bytes and not _MAGIC_CHECKS[ext](first_bytes):
-        raise ApiError(400, "SIGNATURE_MISMATCH", "File content signature does not match declared file type")
+        # Tolerant signature check for video types to prevent false-rejections on variant headers
+        if not (ext in _VIDEO_EXTS and (not mime_lower or mime_lower.startswith("video/") or mime_lower == "application/octet-stream")):
+            raise ApiError(400, "SIGNATURE_MISMATCH", "File content signature does not match declared file type")
 
     settings = get_settings()
     size_mb = file_size_bytes / (1024 * 1024)

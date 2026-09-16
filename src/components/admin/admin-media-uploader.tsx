@@ -398,7 +398,9 @@ export function AdminMediaUploader({
 
   // Upload single file handler
   async function uploadFile(file: File): Promise<MediaUploaderItem> {
-    const isVid = file.type.startsWith("video/") || file.name.match(/\.(mp4|webm|mov)$/i);
+    const isVid =
+      file.type.startsWith("video/") ||
+      Boolean(file.name.match(/\.(mp4|webm|mov|m4v|avi|mkv|wmv|flv|3gp|ts|m2ts)$/i));
     const sizeMb = file.size / (1024 * 1024);
 
     if (isVid && !allowVideo) {
@@ -424,6 +426,7 @@ export function AdminMediaUploader({
     if (isVid) {
       const controller = new AbortController();
       setAbortController(controller);
+      const defaultChunkSize = 3 * 1024 * 1024;
       setUploadProgress({
         fileName: file.name,
         percent: 0,
@@ -432,7 +435,7 @@ export function AdminMediaUploader({
         speedBytesPerSec: 0,
         etaSeconds: 0,
         currentChunk: 1,
-        totalChunks: Math.ceil(file.size / (16 * 1024 * 1024)),
+        totalChunks: Math.ceil(file.size / defaultChunkSize),
         status: "uploading",
       });
 
@@ -489,6 +492,14 @@ export function AdminMediaUploader({
         if (!uploaded) throw new Error("Upload finalization failed");
         return {
           url: getMediaUrl(uploaded),
+          mediaType: "image",
+          altText: file.name,
+        };
+      } else if (file.size > 3 * 1024 * 1024) {
+        // Fallback for non-R2 environments: use chunked upload for images > 3MB to bypass Vercel 4.5MB limit
+        const url = await uploadChunkedVideo(file, {});
+        return {
+          url,
           mediaType: "image",
           altText: file.name,
         };
