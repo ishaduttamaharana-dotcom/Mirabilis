@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { usePublicCollection } from "@/hooks/use-public-content";
-import { getMediaUrl } from "@/lib/api-client";
+import { getMediaUrl, isVideoUrl } from "@/lib/api-client";
 import { Maximize2, Play, X } from "lucide-react";
 
 export const Route = createFileRoute("/gallery")({
@@ -61,7 +61,7 @@ function GalleryPage() {
           <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
             {galleryItems.map((item: any) => {
               const src = getMediaUrl(item.imageUrl || item.image || item.url);
-              const isVid = item.mediaType === "video" || src.match(/\.(mp4|webm|mov)$/i);
+              const isVid = item.mediaType === "video" || isVideoUrl(src);
 
               return (
                 <div
@@ -136,7 +136,7 @@ function GalleryPage() {
 
             <div className="my-6 max-h-[70vh] w-full flex items-center justify-center overflow-hidden rounded-2xl bg-black">
               {selectedMedia.mediaType === "video" ||
-              (selectedMedia.imageUrl || selectedMedia.url || "").match(/\.(mp4|webm|mov)$/i) ? (
+              isVideoUrl(selectedMedia.imageUrl || selectedMedia.url || "") ? (
                 <video
                   src={getMediaUrl(selectedMedia.imageUrl || selectedMedia.url)}
                   controls

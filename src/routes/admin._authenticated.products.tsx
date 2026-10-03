@@ -1,9 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { AdminCollectionPage } from "@/components/admin/collection-crud-page";
-import { findCollectionConfig } from "@/lib/admin/collections";
-
-const config = findCollectionConfig("products")!;
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/admin/_authenticated/products")({
-  component: () => <AdminCollectionPage config={config} />,
+  beforeLoad: () => {
+    throw redirect({ to: "/admin/portfolio" });
+  },
+  component: () => null,
 });

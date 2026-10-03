@@ -149,8 +149,8 @@ def create_app() -> FastAPI:
     </div>
 
     <div class="creds">
-      <div><strong>Default Admin Email:</strong> admin@rrindustries.com</div>
-      <div style="margin-top: 4px;"><strong>Default Admin Password:</strong> ChangeMeImmediately_2026!</div>
+      <div><strong>Default Admin 1:</strong> admin@mirabilis.com / <code>MirabilisBYT@2026</code></div>
+      <div style="margin-top: 6px;"><strong>Default Admin 2:</strong> admin@rrindustries.com / <code>ChangeMeImmediately_2026!</code></div>
     </div>
   </div>
 </body>
@@ -199,6 +199,14 @@ def create_app() -> FastAPI:
             key = file_path.lstrip("/")
             grid_out = await fs.open_download_stream_by_name(key)
             contents = await grid_out.read()
+
+            # Cache locally for subsequent fast reads on this container instance
+            try:
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+                local_file.write_bytes(contents)
+            except Exception:
+                pass
+
             mime, _ = mimetypes.guess_type(key)
             return Response(
                 content=contents,

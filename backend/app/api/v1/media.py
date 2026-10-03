@@ -486,10 +486,11 @@ async def complete_upload(
             full_bytes.extend(chunk_map[i])
 
         ext = meta.get("ext", "mp4")
-        first_chunk = bytes(full_bytes[:64])
+        first_chunk = bytes(full_bytes[:512])
         from app.core.upload_validation import _MAGIC_CHECKS, _VIDEO_EXTS
+        mime_meta = (meta.get("mimeType") or "").lower()
         if first_chunk and ext in _MAGIC_CHECKS and not _MAGIC_CHECKS[ext](first_chunk):
-            if not (ext in _VIDEO_EXTS and (not meta.get("mimeType") or meta["mimeType"].startswith("video/"))):
+            if not (ext in _VIDEO_EXTS and (not mime_meta or mime_meta.startswith("video/") or "video" in mime_meta or "octet-stream" in mime_meta or mime_meta.startswith("application/"))):
                 raise ApiError(400, "SIGNATURE_MISMATCH", f"File signature does not match expected '.{ext}' format")
 
         try:

@@ -42,10 +42,16 @@ class MediaRepository:
         doc["_id"] = result.inserted_id
         return doc
 
-    async def get_by_id(self, media_id: str) -> dict[str, Any] | None:
-        if not ObjectId.is_valid(media_id):
+    async def get_by_id_or_key(self, identifier: str) -> dict[str, Any] | None:
+        if not identifier:
             return None
-        return await self._collection.find_one({"_id": ObjectId(media_id)})
+        if ObjectId.is_valid(identifier):
+            return await self._collection.find_one({"_id": ObjectId(identifier)})
+        clean_key = identifier.split("/uploads/")[-1].lstrip("/")
+        return await self._collection.find_one({"key": clean_key})
+
+    async def get_by_id(self, media_id: str) -> dict[str, Any] | None:
+        return await self.get_by_id_or_key(media_id)
 
     async def list(
         self, page: int, page_size: int, category: str | None = None
@@ -62,17 +68,27 @@ class MediaRepository:
         return items, total
 
     async def increment_ref(self, media_id: str, delta: int = 1) -> None:
-        if not ObjectId.is_valid(media_id):
+        if not media_id:
             return
+        if ObjectId.is_valid(media_id):
+            query: dict[str, Any] = {"_id": ObjectId(media_id)}
+        else:
+            clean_key = media_id.split("/uploads/")[-1].lstrip("/")
+            query = {"key": clean_key}
         await self._collection.update_one(
-            {"_id": ObjectId(media_id)},
+            query,
             {"$inc": {"referenceCount": delta}, "$set": {"updatedAt": datetime.now(UTC)}},
         )
 
     async def delete(self, media_id: str) -> None:
-        if not ObjectId.is_valid(media_id):
+        if not media_id:
             return
-        await self._collection.delete_one({"_id": ObjectId(media_id)})
+        if ObjectId.is_valid(media_id):
+            query: dict[str, Any] = {"_id": ObjectId(media_id)}
+        else:
+            clean_key = media_id.split("/uploads/")[-1].lstrip("/")
+            query = {"key": clean_key}
+        await self._collection.delete_one(query)
 
     async def find_orphaned(self) -> List[dict[str, Any]]:  # noqa: UP006 (mypy: see "list" method name collision above)
         return [doc async for doc in self._collection.find({"referenceCount": {"$lte": 0}})]

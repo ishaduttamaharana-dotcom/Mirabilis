@@ -1,30 +1,11 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { SiteHeader } from "@/components/site-header";
-import { SiteFooter } from "@/components/site-footer";
-import { work } from "@/content/site";
-
-import { usePublicCollection } from "@/hooks/use-public-content";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { PortfolioPage } from "./portfolio";
 
 export const Route = createFileRoute("/work")({
-  head: () => ({
-    meta: [
-      { title: "Selected Work — Mirabilis Visual Production" },
-      {
-        name: "description",
-        content:
-          "Resort, hospitality and brand-film projects by Mirabilis: golden-hour and after-dark photography, cinematography and 360° tours across Maharashtra.",
-      },
-      { property: "og:title", content: "Selected Work — Mirabilis Visual Production" },
-      {
-        property: "og:description",
-        content:
-          "A selection of resort, brand-film and 360° tour projects shot in Nagpur and across Maharashtra.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
-  component: WorkPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/portfolio" });
+  },
+  component: PortfolioPage,
 });
 
 function WorkPage() {

@@ -110,8 +110,9 @@ def validate_upload_header(
         not mime_lower
         or mime_lower in expected_mimes
         or mime_lower == "application/octet-stream"
+        or mime_lower == "binary/octet-stream"
         or (ext in _IMAGE_EXTS and mime_lower.startswith("image/"))
-        or (ext in _VIDEO_EXTS and mime_lower.startswith("video/"))
+        or (ext in _VIDEO_EXTS and (mime_lower.startswith("video/") or "video" in mime_lower or mime_lower.startswith("application/")))
     )
     if not is_valid_mime:
         raise ApiError(
@@ -120,7 +121,7 @@ def validate_upload_header(
 
     if first_bytes and not _MAGIC_CHECKS[ext](first_bytes):
         # Tolerant signature check for video types to prevent false-rejections on variant headers
-        if not (ext in _VIDEO_EXTS and (not mime_lower or mime_lower.startswith("video/") or mime_lower == "application/octet-stream")):
+        if not (ext in _VIDEO_EXTS and (not mime_lower or mime_lower.startswith("video/") or "video" in mime_lower or "octet-stream" in mime_lower or mime_lower.startswith("application/"))):
             raise ApiError(400, "SIGNATURE_MISMATCH", "File content signature does not match declared file type")
 
     settings = get_settings()

@@ -1,20 +1,11 @@
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Check, Film, Quote, Sparkles } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { SiteHeader } from "@/components/site-header";
-import { SiteFooter } from "@/components/site-footer";
-import { work } from "@/content/site";
-import { api, getMediaUrl } from "@/lib/api-client";
-import { Badge } from "@/components/ui/badge";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { PortfolioDetailPage } from "./portfolio.$slug";
 
 export const Route = createFileRoute("/work/$slug")({
-  head: ({ params }) => ({
-    meta: [
-      { title: `${params.slug.replace(/-/g, " ")} — Mirabilis Visual Production` },
-      { name: "description", content: "Visual production case study by Mirabilis studio." },
-    ],
-  }),
-  component: WorkDetailPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/portfolio/$slug", params: { slug: params.slug } });
+  },
+  component: PortfolioDetailPage,
 });
 
 function WorkDetailPage() {

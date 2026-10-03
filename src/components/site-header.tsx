@@ -11,12 +11,12 @@ type NavItem = {
 };
 
 const nav: NavItem[] = [
-  { label: "Work", to: "/work" },
+  { label: "Portfolio", to: "/portfolio" },
   { label: "Services", to: "/services" },
+  { label: "The Studio", to: "/studio" },
   { label: "Gallery", to: "/", hash: "gallery" },
-  { label: "Products", to: "/", hash: "products" },
-  { label: "Blog", to: "/blog" },
   { label: "Pricing", to: "/pricing" },
+  { label: "Blog", to: "/blog" },
   { label: "Contact", to: "/contact" },
 ];
 

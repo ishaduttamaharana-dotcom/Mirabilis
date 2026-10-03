@@ -84,3 +84,37 @@ async def test_delete_dereferences_all_media():
     doc = await service.create({"title": "Brand Films", "cardImage": "m9"}, actor_id="u1")
     await service.delete(doc["_id"], actor_id="u1")
     assert media.refs["m9"] == 0
+
+
+@pytest.mark.asyncio
+async def test_media_repo_supports_key_and_url_lookups():
+    from app.repositories.media import MediaRepository
+
+    class FakeCollection:
+        def __init__(self):
+            self.docs = [{"_id": "obj1", "key": "images/test.png", "referenceCount": 0}]
+
+        async def find_one(self, query):
+            if "_id" in query:
+                for d in self.docs:
+                    if d["_id"] == query["_id"]:
+                        return d
+            if "key" in query:
+                for d in self.docs:
+                    if d["key"] == query["key"]:
+                        return d
+            return None
+
+        async def update_one(self, query, update):
+            doc = await self.find_one(query)
+            if doc and "$inc" in update:
+                doc["referenceCount"] += update["$inc"].get("referenceCount", 0)
+
+    fake_db = {"media": FakeCollection()}
+    repo = MediaRepository(fake_db)
+
+    await repo.increment_ref("/uploads/images/test.png", 1)
+    doc = await repo.get_by_id_or_key("/uploads/images/test.png")
+    assert doc is not None
+    assert doc["referenceCount"] == 1
+

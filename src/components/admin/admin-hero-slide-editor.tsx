@@ -245,7 +245,9 @@ export function AdminHeroSlideEditor({
       const completedParts: { PartNumber: number; ETag: string }[] = [];
       const maxConcurrency = 3;
 
-      const uploadSinglePart = async (partNumber: number): Promise<{ PartNumber: number; ETag: string }> => {
+      const uploadSinglePart = async (
+        partNumber: number,
+      ): Promise<{ PartNumber: number; ETag: string }> => {
         const start = (partNumber - 1) * chunkSize;
         const end = Math.min(start + chunkSize, totalBytes);
         const chunkBlob = file.slice(start, end);
@@ -310,8 +312,12 @@ export function AdminHeroSlideEditor({
       for (let i = 0; i < totalChunks; i += maxConcurrency) {
         if (options.signal?.aborted) {
           try {
-            await api.delete(`/admin/media/upload/cancel/${uploadId}?key=${encodeURIComponent(key)}`);
-          } catch {}
+            await api.delete(
+              `/admin/media/upload/cancel/${uploadId}?key=${encodeURIComponent(key)}`,
+            );
+          } catch {
+            // Ignore cancellation cleanup error
+          }
           throw new Error("Upload cancelled");
         }
 

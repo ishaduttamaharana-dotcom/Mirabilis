@@ -160,3 +160,18 @@ async def test_change_password_rejects_inactive_account():
     with pytest.raises(ApiError) as exc_info:
         await service.change_password("u1", "OldPassword123!", "NewPassword123!")
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ensure_seed_admin_seeds_accounts():
+    from app.core.db import ensure_seed_admin, get_db
+    from app.repositories.users import UsersRepository
+
+    await ensure_seed_admin()
+    db = get_db()
+    users_repo = UsersRepository(db)
+
+    admin1 = await users_repo.find_by_email("admin@mirabilis.com")
+    assert admin1 is not None
+    assert verify_password("MirabilisBYT@2026", admin1["passwordHash"])
+

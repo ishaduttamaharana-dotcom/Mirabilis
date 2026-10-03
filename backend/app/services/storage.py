@@ -67,23 +67,37 @@ class LocalStorageAdapter(StorageAdapter):
 
     async def save(self, category: str, extension: str, content: bytes) -> str:
         category = category.replace("..", "").strip("/")
+        filename = generate_filename(extension)
+        key = f"{category}/{filename}"
+
+        # 1. Save locally if writable
         try:
             target_dir = self._base / category
             target_dir.mkdir(parents=True, exist_ok=True)
-            filename = generate_filename(extension)
             target_path = target_dir / filename
             target_path.write_bytes(content)
-            return f"{category}/{filename}"
-        except OSError:
-            # Serverless fallback (e.g. Vercel read-only filesystem) -> store directly in GridFS
+        except Exception:
+            pass
+
+        # 2. Always persist to GridFS so uploads survive container cold-starts and restarts
+        try:
             gridfs = GridFSStorageAdapter()
-            return await gridfs.save(category, extension, content)
+            await gridfs.save_with_key(key, content)
+        except Exception as err:
+            print(f"[STORAGE GRIDFS WARNING] Could not persist to GridFS: {err}")
+
+        return key
 
     async def delete(self, key: str) -> None:
         path = self._base / key
         try:
             path.unlink(missing_ok=True)
         except OSError:
+            pass
+        try:
+            gridfs = GridFSStorageAdapter()
+            await gridfs.delete(key)
+        except Exception:
             pass
 
     def public_url(self, key: str) -> str:
@@ -102,18 +116,23 @@ class GridFSStorageAdapter(StorageAdapter):
         db = get_db()
         return AsyncIOMotorGridFSBucket(db)
 
-    async def save(self, category: str, extension: str, content: bytes) -> str:
-        category = category.replace("..", "").strip("/")
-        filename = generate_filename(extension)
-        key = f"{category}/{filename}"
+    async def save_with_key(self, key: str, content: bytes) -> str:
+        category = key.split("/", 1)[0] if "/" in key else "images"
+        ext = key.rsplit(".", 1)[-1] if "." in key else "png"
         bucket = self._get_bucket()
         upload_stream = bucket.open_upload_stream(
             key,
-            metadata={"category": category, "extension": extension}
+            metadata={"category": category, "extension": ext}
         )
         await upload_stream.write(content)
         await upload_stream.close()
         return key
+
+    async def save(self, category: str, extension: str, content: bytes) -> str:
+        category = category.replace("..", "").strip("/")
+        filename = generate_filename(extension)
+        key = f"{category}/{filename}"
+        return await self.save_with_key(key, content)
 
     async def delete(self, key: str) -> None:
         try:
@@ -130,6 +149,7 @@ class GridFSStorageAdapter(StorageAdapter):
         if backend_base:
             return f"{backend_base.rstrip('/')}/uploads/{key.lstrip('/')}"
         return f"/uploads/{key.lstrip('/')}"
+
 
 
 class R2StorageAdapter(StorageAdapter):

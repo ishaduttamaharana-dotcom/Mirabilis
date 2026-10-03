@@ -45,9 +45,8 @@ function Home() {
         <Hero />
         <Services />
         <Signature />
-        <Work />
+        <PortfolioSection />
         <IndustriesSection />
-        <ProductsSection />
         <GallerySection />
         <Approach />
         <TeamSection />
@@ -82,8 +81,8 @@ function Hero() {
       ctaLabel: "Start a project",
       ctaUrl: "/contact",
       secondaryCtaShow: true,
-      secondaryCtaLabel: "View work",
-      secondaryCtaUrl: "/work",
+      secondaryCtaLabel: "View portfolio",
+      secondaryCtaUrl: "/portfolio",
     },
   ];
 
@@ -228,11 +227,11 @@ function Hero() {
           )}
           {slide.secondaryCtaShow !== false && (
             <Link
-              to={slide.secondaryCtaUrl || "/work"}
+              to={slide.secondaryCtaUrl || "/portfolio"}
               {...(slide.secondaryCtaNewTab ? { target: "_blank" } : {})}
               className="group inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/30 backdrop-blur-md px-9 py-4 text-xs font-semibold uppercase tracking-[0.26em] text-foreground transition-all duration-300 hover:border-primary hover:text-primary"
             >
-              {slide.secondaryCtaLabel || "View work"}
+              {slide.secondaryCtaLabel || "View portfolio"}
               <ArrowUpRight className="size-4 transition-transform group-hover:-translate-y-0.5" />
             </Link>
           )}
@@ -330,49 +329,101 @@ function Signature() {
   );
 }
 
-function Work() {
+function PortfolioSection() {
   const { items: liveWork } = usePublicCollection<any>("projects", work);
 
   return (
-    <section id="work" className="w-full border-t section-padding">
+    <section
+      id="portfolio"
+      className="relative w-full border-t section-padding bg-background scroll-mt-20"
+    >
+      {/* Anchor aliases for backwards compatibility */}
+      <span id="work" className="absolute -top-24 invisible" />
+      <span id="products" className="absolute -top-24 invisible" />
+
       <div className="shell">
         <div className="flex flex-wrap items-end justify-between gap-8">
-          <SectionHead eyebrow="Selected work" title="Recent frames." />
+          <SectionHead
+            eyebrow="Selected Portfolio"
+            title="Recent frames & visual narratives."
+            lede="Architectural stills, golden-hour cinematography, and luxury hospitality campaigns."
+          />
           <Link
-            to="/work"
-            className="group inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-primary"
+            to="/portfolio"
+            className="group inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-primary transition-colors hover:text-foreground"
           >
-            All projects
-            <ArrowUpRight className="size-4 transition-transform group-hover:-translate-y-0.5" />
+            Explore all projects
+            <ArrowUpRight className="size-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
           </Link>
         </div>
-        <div className="mt-16 grid gap-10 sm:grid-cols-2 lg:grid-cols-3">
-          {liveWork.slice(0, 3).map((item: any) => (
-            <Link
-              key={item.slug || item.id}
-              to="/work/$slug"
-              params={{ slug: item.slug || "hillside-resort" }}
-              className="group"
-            >
-              <div className="relative overflow-hidden rounded-2xl border border-border/40 shadow-2xl">
-                <img
-                  src={item.image || item.coverImage || item.cardImage || "/placeholder.svg"}
-                  alt={item.alt || item.title || "Project image"}
-                  width={1200}
-                  height={1500}
-                  loading="lazy"
-                  className="aspect-4/5 w-full object-cover transition-transform duration-700 group-hover:scale-[1.05]"
-                />
-              </div>
-              <p className="mt-6 eyebrow">{item.category || "Portfolio"}</p>
-              <h3 className="mt-2 font-display text-3xl transition-colors group-hover:text-primary">
-                {item.title || item.name}
-              </h3>
-              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                {item.blurb || item.shortDescription}
-              </p>
-            </Link>
-          ))}
+        <div className="mt-16 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          {liveWork.slice(0, 3).map((item: any) => {
+            const slug = item.slug || item.id || "hillside-resort";
+            const img = getMediaUrl(
+              item.cardImage || item.coverImage || item.image || "/placeholder.svg",
+            );
+            const category =
+              item.category ||
+              (Array.isArray(item.categories) && item.categories[0]) ||
+              "Portfolio";
+            const title = item.title || item.name;
+            const client = item.clientRef || item.client;
+            const excerpt = item.shortDescription || item.blurb;
+
+            return (
+              <Link
+                key={slug}
+                to="/portfolio/$slug"
+                params={{ slug }}
+                className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-border/60 bg-card/40 transition-all duration-500 hover:border-primary/60 hover:shadow-2xl hover:bg-card/70"
+              >
+                <div>
+                  <div className="relative aspect-4/3 w-full overflow-hidden bg-black/60">
+                    <img
+                      src={img}
+                      alt={item.alt || title || "Project image"}
+                      width={1200}
+                      height={900}
+                      loading="lazy"
+                      className="size-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-background/90 via-background/20 to-transparent" />
+                    <div className="absolute top-4 inset-x-4 flex items-center justify-between">
+                      <span className="rounded-full bg-background/80 backdrop-blur-md border border-border/60 px-3 py-1 text-[0.65rem] font-medium uppercase tracking-[0.18em] text-foreground">
+                        {category}
+                      </span>
+                      {item.location && (
+                        <span className="rounded-full bg-background/80 backdrop-blur-md border border-border/60 px-2.5 py-1 text-[0.65rem] font-light text-muted-foreground">
+                          {item.location}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-6 space-y-2">
+                    {client && (
+                      <p className="text-[0.7rem] uppercase tracking-[0.2em] font-semibold text-primary">
+                        {client}
+                      </p>
+                    )}
+                    <h3 className="font-display text-2xl font-normal transition-colors group-hover:text-primary">
+                      {title}
+                    </h3>
+                    {excerpt && (
+                      <p className="text-xs sm:text-sm leading-relaxed text-muted-foreground line-clamp-2 font-light">
+                        {excerpt}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-border/40 px-6 py-3.5 bg-background/30 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground group-hover:text-primary transition-colors">
+                  <span>View Project Case Study</span>
+                  <ArrowUpRight className="size-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -621,84 +672,6 @@ function IndustriesSection() {
               </div>
             </Link>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ProductsSection() {
-  const defaultProducts = [
-    {
-      name: "Mirabilis Afterglow LUT Preset Pack",
-      description:
-        "Signature color-grading LUTs engineered for architectural and twilight hospitality videos.",
-      price: 2499,
-      currency: "₹",
-      images: ["https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=80"],
-    },
-    {
-      name: "Fine Art Architectural Print: Hillside Dawn",
-      description: "Limited edition gallery print on archival museum-grade rag paper.",
-      price: 7999,
-      currency: "₹",
-      images: ["https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?w=800&q=80"],
-    },
-  ];
-  const { items: liveProducts } = usePublicCollection<any>("products", defaultProducts);
-
-  return (
-    <section id="products" className="w-full border-t section-padding bg-card/10">
-      <div className="shell">
-        <SectionHead
-          eyebrow="Studio Store"
-          title="Assets & digital products."
-          lede="Color presets, prints, and tools crafted by our senior colorists and photographers."
-        />
-        <div className="mt-16 grid gap-8 sm:grid-cols-2 lg:grid-cols-2">
-          {liveProducts.map((prod: any, idx: number) => {
-            const imgSrc = Array.isArray(prod.images)
-              ? prod.images[0]
-              : prod.image || prod.coverImage || "/placeholder.svg";
-            return (
-              <div
-                key={idx}
-                className="flex flex-col sm:flex-row overflow-hidden rounded-2xl border border-border/60 bg-background/95 p-6 gap-6 shadow-xl"
-              >
-                <div className="relative h-48 sm:h-auto sm:w-48 shrink-0 overflow-hidden rounded-xl">
-                  <img
-                    src={getMediaUrl(imgSrc)}
-                    alt={prod.name || prod.title}
-                    width={600}
-                    height={600}
-                    className="size-full object-cover"
-                  />
-                </div>
-                <div className="flex flex-col justify-between flex-1">
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="font-display text-2xl text-foreground">
-                        {prod.name || prod.title}
-                      </h3>
-                      <span className="rounded-full bg-primary/10 border border-primary/30 px-3 py-1 text-xs font-semibold text-primary">
-                        {prod.currency || "₹"}
-                        {prod.price ? Number(prod.price).toLocaleString("en-IN") : "Enquire"}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                      {prod.description || prod.summary}
-                    </p>
-                  </div>
-                  <Link
-                    to="/contact"
-                    className="mt-6 inline-flex items-center justify-center rounded-full border border-primary/60 px-6 py-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-                  >
-                    Purchase / Order
-                  </Link>
-                </div>
-              </div>
-            );
-          })}
         </div>
       </div>
     </section>

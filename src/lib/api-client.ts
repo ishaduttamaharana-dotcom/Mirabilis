@@ -16,10 +16,7 @@ function resolveApiBaseUrl(): string {
   if (envUrl && typeof envUrl === "string" && envUrl.trim() !== "") {
     // If VITE_API_BASE_URL points to localhost/127.0.0.1 in production,
     // fallback to relative /api/v1 so production deployment uses same-origin routes.
-    if (
-      import.meta.env.PROD &&
-      (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))
-    ) {
+    if (import.meta.env.PROD && (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))) {
       return "/api/v1";
     }
     return envUrl;
@@ -180,7 +177,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
-  get: <T>(path: string, options?: RequestOptions) => request<T>(path, { method: "GET", ...options }),
+  get: <T>(path: string, options?: RequestOptions) =>
+    request<T>(path, { method: "GET", ...options }),
   post: <T>(path: string, body?: unknown, options?: RequestOptions) =>
     request<T>(path, { method: "POST", body, ...options }),
   put: <T>(path: string, body?: unknown, options?: RequestOptions) =>
@@ -200,6 +198,39 @@ export function paginatedQuery<T>(
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
     .join("&");
   return api.get<Paginated<T>>(`${path}${query ? `?${query}` : ""}`);
+}
+
+export const VIDEO_EXTENSIONS_REGEX = /\.(mp4|webm|mov|m4v|avi|mkv|wmv|flv|3gp|ts|m2ts)$/i;
+
+export function isVideoUrl(url?: string): boolean {
+  if (!url) return false;
+  return (
+    url.startsWith("data:video/") ||
+    url.startsWith("blob:video/") ||
+    VIDEO_EXTENSIONS_REGEX.test(url)
+  );
+}
+
+export function getVideoMimeType(filename: string, declaredType?: string): string {
+  if (declaredType && (declaredType.startsWith("video/") || declaredType.includes("video"))) {
+    return declaredType;
+  }
+  const extMatch = filename.match(/\.([a-z0-9]+)$/i);
+  const ext = extMatch && extMatch[1] ? extMatch[1].toLowerCase() : "";
+  const map: Record<string, string> = {
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    webm: "video/webm",
+    m4v: "video/x-m4v",
+    avi: "video/x-msvideo",
+    mkv: "video/x-matroska",
+    wmv: "video/x-ms-wmv",
+    flv: "video/x-flv",
+    "3gp": "video/3gpp",
+    ts: "video/mp2t",
+    m2ts: "video/mp2t",
+  };
+  return map[ext] || declaredType || "video/mp4";
 }
 
 export function getMediaUrl(url?: string): string {

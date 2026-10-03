@@ -7,42 +7,34 @@ This project was built with [Lovable](https://lovable.dev).
 To avoid Vercel Serverless Function payload limit (4.5 MB `Content Too Large` 413 error) on production uploads, large images and videos are uploaded directly from the browser to Cloudflare R2 using presigned URLs.
 
 ### 1. Create a Cloudflare R2 Bucket
+
 1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com) -> **R2 Object Storage**.
 2. Create a bucket (e.g. `mirabilis-media`).
 3. Connect a custom domain or enable the public R2.dev bucket domain (e.g. `https://media.mirabilisbyt.in`).
 
 ### 2. Configure CORS on Cloudflare R2 Bucket
+
 Go to your R2 Bucket Settings -> **CORS Policy** and add:
 
 ```json
 [
   {
-    "AllowedOrigins": [
-      "https://mirabilisbyt.in",
-      "http://localhost:8080",
-      "http://localhost:5173"
-    ],
-    "AllowedMethods": [
-      "GET",
-      "PUT",
-      "HEAD"
-    ],
-    "AllowedHeaders": [
-      "*"
-    ],
-    "ExposeHeaders": [
-      "ETag"
-    ],
+    "AllowedOrigins": ["https://mirabilisbyt.in", "http://localhost:8080", "http://localhost:5173"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
 
 ### 3. Generate R2 API Token Credentials
+
 1. Under Cloudflare R2 -> **Manage R2 API Tokens**, create an API token with **Object Read & Write** permissions scoped to your bucket.
 2. Note down the **Account ID**, **Access Key ID**, and **Secret Access Key**.
 
 ### 4. Set Environment Variables in Vercel
+
 In your Vercel Dashboard -> **Settings** -> **Environment Variables**, set:
 
 ```env

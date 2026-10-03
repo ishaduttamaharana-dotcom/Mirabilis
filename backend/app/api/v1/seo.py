@@ -12,12 +12,12 @@ from app.repositories.site_settings import SiteSettingsRepository
 router = APIRouter(tags=["seo"])
 
 # Static public routes from webflow.md that aren't backed by a CMS collection.
-_STATIC_ROUTES = ["/", "/about", "/services", "/work", "/pricing", "/blog", "/contact", "/privacy", "/terms"]
+_STATIC_ROUTES = ["/", "/about", "/services", "/portfolio", "/pricing", "/blog", "/contact", "/privacy", "/terms"]
 
 # collection name -> (url prefix, whether it has a slug)
 _SLUGGED_PUBLIC_COLLECTIONS = [
     ("services", "/services"),
-    ("projects", "/work"),
+    ("projects", "/portfolio"),
     ("industries", "/industries"),
     ("blog_posts", "/blog"),
 ]

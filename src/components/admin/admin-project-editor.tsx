@@ -51,6 +51,7 @@ export interface ProjectData {
   id?: string;
   title: string;
   slug?: string;
+  category?: string;
   shortDescription?: string;
   description?: string;
   body?: string;
@@ -109,6 +110,9 @@ export function AdminProjectEditor({
 
   const [title, setTitle] = useState(initial?.title ?? "");
   const [slug, setSlug] = useState(initial?.slug ?? "");
+  const [category, setCategory] = useState(
+    initial?.category ?? (Array.isArray(initial?.categories) ? initial.categories[0] : "") ?? "",
+  );
   const [shortDescription, setShortDescription] = useState(initial?.shortDescription ?? "");
   const [description, setDescription] = useState(initial?.description ?? initial?.body ?? "");
   const [creativeDirection, setCreativeDirection] = useState(initial?.creativeDirection ?? "");
@@ -121,6 +125,22 @@ export function AdminProjectEditor({
   const [featured, setFeatured] = useState(initial?.featured ?? false);
   const [sortOrder, setSortOrder] = useState<number>(initial?.sortOrder ?? 0);
   const [state, setState] = useState<string>(initial?.state ?? "draft");
+
+  function toSlug(text: string) {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  function handleTitleChange(val: string) {
+    const prevExpected = toSlug(title);
+    setTitle(val);
+    if (!slug || slug === prevExpected) {
+      setSlug(toSlug(val));
+    }
+  }
 
   // Services list
   const [services, setServices] = useState<string[]>(initial?.services ?? []);
@@ -277,6 +297,8 @@ export function AdminProjectEditor({
       const payload = {
         title,
         slug: slug || undefined,
+        category,
+        categories: category ? [category] : [],
         shortDescription,
         body: description,
         description,
@@ -341,12 +363,12 @@ export function AdminProjectEditor({
         </div>
 
         <div className="flex items-center gap-3">
-          {initial?.slug && (
+          {(initial?.slug || slug) && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => window.open(`/work/${initial.slug}`, "_blank")}
+              onClick={() => window.open(`/portfolio/${initial?.slug || slug}`, "_blank")}
             >
               <Eye className="mr-1.5 h-3.5 w-3.5" />
               Preview Project
@@ -399,10 +421,29 @@ export function AdminProjectEditor({
                   <Input
                     id="title"
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => handleTitleChange(e.target.value)}
                     placeholder="e.g. Hillside Sanctuary Resort"
                     required
                   />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="category">Category</Label>
+                  <Input
+                    id="category"
+                    list="category-options"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="e.g. Resorts & Hospitality"
+                  />
+                  <datalist id="category-options">
+                    <option value="Resorts & Hospitality" />
+                    <option value="Cafes & Dining" />
+                    <option value="Villas & Estates" />
+                    <option value="Commercial & Architecture" />
+                    <option value="Lifestyle & Heritage" />
+                    <option value="Brand Films" />
+                  </datalist>
                 </div>
 
                 <div className="space-y-1.5">

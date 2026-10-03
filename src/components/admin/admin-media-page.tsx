@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, ApiClientError, getMediaUrl, paginatedQuery } from "@/lib/api-client";
+import { api, ApiClientError, getMediaUrl, isVideoUrl, paginatedQuery } from "@/lib/api-client";
 import { AdminMediaUploader } from "@/components/admin/admin-media-uploader";
 import {
   Select,
@@ -122,7 +122,7 @@ export function AdminMediaPage() {
           const isVid =
             item.category === "videos" ||
             item.mimeType?.startsWith("video/") ||
-            item.url.match(/\.(mp4|webm|mov)$/i);
+            isVideoUrl(item.url);
           const fullMediaUrl = getMediaUrl(item.url);
 
           return (
@@ -253,7 +253,7 @@ export function AdminMediaPage() {
             <div className="my-6 max-h-[60vh] w-full flex items-center justify-center overflow-hidden rounded-xl bg-black">
               {previewMedia.category === "videos" ||
               previewMedia.mimeType?.startsWith("video/") ||
-              previewMedia.url.match(/\.(mp4|webm|mov)$/i) ? (
+              isVideoUrl(previewMedia.url) ? (
                 <video
                   src={getMediaUrl(previewMedia.url)}
                   controls

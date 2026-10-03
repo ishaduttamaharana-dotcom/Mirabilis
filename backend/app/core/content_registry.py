@@ -82,6 +82,7 @@ COLLECTIONS: dict[str, CollectionSpec] = {
             "projectDetails": _f(type=dict, required=False, default={}),
             "testimonial": _f(type=dict, required=False, default={}),
             "video": _f(type=dict, required=False, default={}),
+            "category": _f(type=str, required=False),
             "categories": _f(type=list, required=False, default=[]),
             "clientRef": _f(type=str, required=False),
             "projectDate": _f(type=str, required=False),

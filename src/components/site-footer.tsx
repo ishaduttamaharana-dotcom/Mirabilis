@@ -25,7 +25,7 @@ export function SiteFooter() {
               Start a project
             </Link>
             <Link
-              to="/work"
+              to="/portfolio"
               className="rounded-full border border-border px-8 py-3 text-xs font-semibold uppercase tracking-[0.24em] text-foreground transition-colors hover:border-primary hover:text-primary"
             >
               Explore portfolio
@@ -78,8 +78,8 @@ export function SiteFooter() {
           <p className="eyebrow text-primary">Explore</p>
           <ul className="mt-6 space-y-3 text-sm text-muted-foreground">
             <li>
-              <Link to="/work" className="transition-colors hover:text-primary">
-                Selected work
+              <Link to="/portfolio" className="transition-colors hover:text-primary">
+                Portfolio & projects
               </Link>
             </li>
             <li>

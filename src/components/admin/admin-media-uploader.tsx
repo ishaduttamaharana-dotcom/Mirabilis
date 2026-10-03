@@ -1,6 +1,6 @@
 import { useState, useRef, type ChangeEvent, type DragEvent } from "react";
 import { toast } from "sonner";
-import { api, ApiClientError, getMediaUrl } from "@/lib/api-client";
+import { api, ApiClientError, getMediaUrl, getVideoMimeType, isVideoUrl } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -85,6 +85,7 @@ async function uploadChunkedVideo(
     );
   }
 
+  const mimeType = getVideoMimeType(file.name, file.type);
   const initRes = await api.post<{
     isDirect?: boolean;
     uploadId: string;
@@ -95,7 +96,7 @@ async function uploadChunkedVideo(
   }>("/admin/media/upload/init", {
     filename: file.name,
     fileSize: totalBytes,
-    mimeType: file.type || "video/mp4",
+    mimeType,
     altText: file.name,
   });
 
@@ -108,7 +109,9 @@ async function uploadChunkedVideo(
     const completedParts: { PartNumber: number; ETag: string }[] = [];
     const maxConcurrency = 3;
 
-    const uploadSinglePart = async (partNumber: number): Promise<{ PartNumber: number; ETag: string }> => {
+    const uploadSinglePart = async (
+      partNumber: number,
+    ): Promise<{ PartNumber: number; ETag: string }> => {
       const start = (partNumber - 1) * chunkSize;
       const end = Math.min(start + chunkSize, totalBytes);
       const chunkBlob = file.slice(start, end);
@@ -174,7 +177,9 @@ async function uploadChunkedVideo(
       if (options.signal?.aborted) {
         try {
           await api.delete(`/admin/media/upload/cancel/${uploadId}?key=${encodeURIComponent(key)}`);
-        } catch {}
+        } catch {
+          // Ignore cancellation error
+        }
         throw new Error("Upload cancelled");
       }
 
@@ -234,7 +239,9 @@ async function uploadChunkedVideo(
       if (options.signal?.aborted) {
         try {
           await api.delete(`/admin/media/upload/cancel/${uploadId}`);
-        } catch {}
+        } catch {
+          // Ignore cancellation error
+        }
         throw new Error("Upload cancelled");
       }
 
@@ -523,7 +530,6 @@ export function AdminMediaUploader({
     }
   }
 
-
   // Handle incoming FileList from drop or file input
   async function processFiles(files: FileList | File[]) {
     if (!files || files.length === 0) return;
@@ -792,7 +798,7 @@ export function AdminMediaUploader({
       {mode === "single" && singleValueUrl && (
         <div className="relative overflow-hidden rounded-2xl border border-border/60 bg-card p-4 flex flex-col sm:flex-row items-center gap-4">
           <div className="relative h-32 w-44 shrink-0 overflow-hidden rounded-xl bg-black">
-            {singleValueUrl.match(/\.(mp4|webm|mov)$/i) ? (
+            {isVideoUrl(singleValueUrl) ? (
               <video
                 src={getMediaUrl(singleValueUrl)}
                 preload="metadata"
@@ -843,7 +849,7 @@ export function AdminMediaUploader({
 
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((item, idx) => {
-              const isVid = item.mediaType === "video" || item.url.match(/\.(mp4|webm|mov)$/i);
+              const isVid = item.mediaType === "video" || isVideoUrl(item.url);
               const seqNum = String(idx + 1).padStart(2, "0");
 
               return (
